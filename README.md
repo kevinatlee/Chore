@@ -109,4 +109,13 @@ python manage.py purge_operational_data --dry-run
 python manage.py purge_operational_data
 ```
 
-Configuration, inactive identities, and sent report snapshots are not removed by retention. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.
+For the one-time transition from development/testing to live use on the same database, first inspect and then remove all runtime operational history with:
+
+```powershell
+python manage.py purge_operational_data --fresh-start --dry-run
+python manage.py purge_operational_data --fresh-start
+```
+
+Fresh-start mode removes all Chore List instances, item snapshots, Staff Contributions, and scheduled report delivery history. It deliberately preserves Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster. It contains no named or special-case staff cleanup logic.
+
+Normal retention does not remove configuration, inactive identities, or sent report snapshots. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.

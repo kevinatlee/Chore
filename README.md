@@ -102,20 +102,20 @@ python manage.py send_scheduled_reports
 
 Email uses Django settings backed by `DJANGO_EMAIL_BACKEND`, `DJANGO_EMAIL_HOST`, `DJANGO_EMAIL_PORT`, `DJANGO_EMAIL_HOST_USER`, `DJANGO_EMAIL_HOST_PASSWORD`, `DJANGO_EMAIL_USE_TLS`, and `DJANGO_DEFAULT_FROM_EMAIL`. No SMTP credential is stored in the repository.
 
-Purge only operational checklists strictly older than the seven-calendar-year boundary with:
+Purge only real, non-mock operational checklists strictly older than the seven-calendar-year boundary with:
 
 ```powershell
 python manage.py purge_operational_data --dry-run
 python manage.py purge_operational_data
 ```
 
-For the one-time transition from development/testing to live use on the same database, first inspect and then remove all runtime operational history with:
+For the one-time transition from development/testing to live use on the same database, first inspect and then remove all real runtime operational history while preserving generated mock reporting history with:
 
 ```powershell
 python manage.py purge_operational_data --fresh-start --dry-run
 python manage.py purge_operational_data --fresh-start
 ```
 
-Fresh-start mode removes all Chore List instances, item snapshots, Staff Contributions, and scheduled report delivery history. It deliberately preserves Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster. It contains no named or special-case staff cleanup logic.
+Fresh-start mode removes all non-mock Chore List instances, their item snapshots and Staff Contributions, plus scheduled report delivery history. Generated mock Chore Lists, items, and Staff Contributions remain available for reporting; `python manage.py generate_mock_data --clear` is the explicit way to remove them. Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster are also preserved. The purge contains no named or special-case staff cleanup logic.
 
-Normal retention does not remove configuration, inactive identities, or sent report snapshots. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.
+Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.

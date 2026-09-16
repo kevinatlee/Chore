@@ -85,14 +85,21 @@ Phase 2 adds Program-scoped Manager reporting without changing shared-checklist 
 
 The report UI is available at `/reports/` and uses one Date control for daily, Monday–Sunday weekly, containing-month, containing-calendar-year, and rolling-365-day periods. It includes Position, valid Shift, Staff, Completion, and Section filtering, plus CSV and print/browser-PDF output. Task wording is normalized at display time, preserving stored configuration and historical snapshots. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
 
-Generate deterministic development reporting history with the real roster, without creating authentication accounts:
+Generate deterministic synthetic operational history for reporting and testing with the normal operational roster:
 
 ```powershell
 python manage.py generate_mock_data --days 365
+```
+
+Generated history uses the normal `ChecklistInstance`, `ChecklistItem`, and `StaffContribution` models. Its contributions reference ordinary `StaffMember` roster records, and its instances are identified internally by `ChecklistInstance.is_mock_data=True`. The marker is not a staff-facing field. Mock generation creates no authentication account and does not depend on any special staff identity.
+
+Delete only generated mock operational history with:
+
+```powershell
 python manage.py generate_mock_data --clear
 ```
 
-Cleanup removes only ChecklistInstances explicitly marked as mock-generated.
+Cleanup removes only ChecklistInstances explicitly marked as mock-generated, plus their Items and Staff Contributions. Real operational history, configuration, roster records, users, and Program memberships remain untouched.
 
 Invoke the scheduler command from the eventual host scheduler at or after 08:00 local time. It determines which daily/weekly/monthly/annual periods are due and uses unique delivery records to avoid repeat sends:
 

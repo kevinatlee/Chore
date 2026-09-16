@@ -17,6 +17,7 @@ from django.urls import reverse
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
+    ChecklistItem,
     ChecklistSection,
     Program,
     ProgramMembership,
@@ -1139,12 +1140,35 @@ class MockDataTests(TestCase):
     def test_cleanup_removes_only_marked_operational_history(self):
         definition = ChecklistDefinition.objects.first()
         legitimate = resolve_checklist(definition, date(2020, 1, 1))
+        legitimate_item = legitimate.items.first()
+        legitimate_staff = StaffMember.objects.filter(
+            program=legitimate.program
+        ).first()
+        _, legitimate_contribution = change_item_state(
+            item_id=legitimate_item.pk,
+            actor=None,
+            staff_member=legitimate_staff,
+            new_state=TaskState.COMPLETED,
+            system=True,
+        )
         roster_count = StaffMember.objects.count()
         call_command("generate_mock_data", days=3, seed=99, verbosity=0)
         self.assertTrue(ChecklistInstance.objects.filter(is_mock_data=True).exists())
+        self.assertTrue(
+            StaffContribution.objects.filter(item__instance__is_mock_data=True).exists()
+        )
         call_command("generate_mock_data", clear=True, verbosity=0)
         self.assertTrue(ChecklistInstance.objects.filter(pk=legitimate.pk).exists())
+        self.assertTrue(ChecklistItem.objects.filter(pk=legitimate_item.pk).exists())
+        self.assertTrue(
+            StaffContribution.objects.filter(
+                pk=legitimate_contribution.pk
+            ).exists()
+        )
         self.assertFalse(ChecklistInstance.objects.filter(is_mock_data=True).exists())
+        self.assertFalse(
+            StaffContribution.objects.filter(item__instance__is_mock_data=True).exists()
+        )
         self.assertEqual(StaffMember.objects.count(), roster_count)
         self.assertEqual(ChecklistDefinition.objects.count(), 7)
 

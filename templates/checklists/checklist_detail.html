@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ instance.category_name_snapshot }} · {{ instance.shift_name_snapshot }} · Chore{% endblock %}
+{% block content %}
+  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}">← All checklists</a>
+  <div class="checklist-heading">
+    <div>
+      <p class="eyebrow">Shared operational checklist</p>
+      <h1>{{ instance.category_name_snapshot }}</h1>
+      <p class="checklist-meta">
+        <strong>{{ instance.operational_date|date:"l, F j, Y" }}</strong>
+        <span>{{ instance.shift_name_snapshot }}</span>
+      </p>
+    </div>
+    <div class="progress-summary">
+      <strong>{{ completed_count }} / {{ total_count }}</strong>
+      <span>resolved</span>
+    </div>
+  </div>
+
+  {% for section in sections %}
+    <section class="task-section">
+      <h2>{{ section.name }}</h2>
+      <div class="task-list">
+        {% for item in section.items %}
+          <article class="task-card state-{{ item.current_state }}">
+            <div class="task-copy">
+              <div class="task-line">
+                {% if item.scheduled_start_snapshot %}
+                  <span class="task-time">{{ item.scheduled_start_snapshot|time:"H:i" }}–{{ item.scheduled_end_snapshot|time:"H:i" }}</span>
+                {% endif %}
+                <h3>{{ item.task_label_snapshot }}</h3>
+              </div>
+              <div class="task-attribution">
+                <span class="status status-{{ item.current_state }}">{{ item.get_current_state_display }}</span>
+                {% if item.current_contributor %}
+                  <span>Staff Contribution by {% firstof item.current_contributor.get_full_name item.current_contributor.username %}</span>
+                  <time datetime="{{ item.state_changed_at|date:'c' }}">{{ item.state_changed_at|date:"M j, H:i" }}</time>
+                {% else %}
+                  <span>No Staff Contribution yet</span>
+                {% endif %}
+              </div>
+            </div>
+            <form method="post" action="{% url 'update-item-state' item.id %}" class="task-actions">
+              {% csrf_token %}
+              <input type="hidden" name="date" value="{{ instance.operational_date|date:'Y-m-d' }}">
+              {% if item.current_state != 'completed' %}
+                <button class="button complete" type="submit" name="state" value="completed">Complete</button>
+              {% endif %}
+              {% if item.allow_na_snapshot and item.current_state != 'na' %}
+                <button class="button na" type="submit" name="state" value="na">N/A</button>
+              {% endif %}
+              {% if item.current_state != 'pending' %}
+                <button class="button reset" type="submit" name="state" value="pending">Reset</button>
+              {% endif %}
+            </form>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% empty %}
+    <div class="empty-state">
+      <h2>No tasks for this date</h2>
+      <p>This can be expected for a weekday-only schedule on a weekend.</p>
+    </div>
+  {% endfor %}
+
+  <section class="contribution-panel">
+    <h2>Recent Staff Contributions</h2>
+    <p>Task changes are retained even if a staff account is later deactivated.</p>
+    <ol class="contribution-list">
+      {% for contribution in contributions %}
+        <li>
+          <strong>{% firstof contribution.staff.get_full_name contribution.staff.username %}</strong>
+          changed “{{ contribution.item.task_label_snapshot }}” from
+          {{ contribution.get_previous_state_display }} to {{ contribution.get_new_state_display }}
+          <time datetime="{{ contribution.created_at|date:'c' }}">{{ contribution.created_at|date:"M j, Y H:i" }}</time>
+        </li>
+      {% empty %}
+        <li>No Staff Contributions yet.</li>
+      {% endfor %}
+    </ol>
+  </section>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Available checklists · Chore{% endblock %}
+{% block content %}
+  <div class="page-heading">
+    <div>
+      <p class="eyebrow">Shared operations</p>
+      <h1>Available checklists</h1>
+      <p>Select a category and shift. Everyone assigned to it works on the same checklist for that date.</p>
+    </div>
+    <form method="get" class="date-form">
+      <label for="date">Operational date</label>
+      <p class="field-help">For an overnight shift, use the date on which the shift starts.</p>
+      <div class="field-row">
+        <input id="date" name="date" type="date" value="{{ operational_date|date:'Y-m-d' }}" required>
+        <button class="button secondary" type="submit">Change date</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="definition-grid">
+    {% for definition in definitions %}
+      <article class="definition-card">
+        <p class="eyebrow">{{ definition.category.name }}</p>
+        <h2>{{ definition.shift.name }}</h2>
+        <p>{{ definition.name }}</p>
+        <a class="button primary" href="{% url 'checklist-detail' definition.id %}?date={{ operational_date|date:'Y-m-d' }}">Open shared checklist</a>
+      </article>
+    {% empty %}
+      <div class="empty-state">
+        <h2>No assigned checklists</h2>
+        <p>An administrator can add an active staff-category assignment.</p>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}

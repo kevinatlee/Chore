@@ -3,13 +3,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time
 from io import StringIO
 from threading import Barrier
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, close_old_connections, transaction
-from django.test import TestCase, TransactionTestCase
+from django.db import IntegrityError, OperationalError, close_old_connections, transaction
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 
 from .models import (
@@ -23,7 +23,13 @@ from .models import (
     TaskDefinition,
     TaskState,
 )
-from .services import change_item_state, resolve_checklist
+from .services import (
+    SQLITE_LOCK_ATTEMPTS,
+    SQLITE_LOCK_BACKOFF_SECONDS,
+    _run_serialized_write,
+    change_item_state,
+    resolve_checklist,
+)
 from .seed_data import DEFINITIONS, LIFE_SKILLS_SLOTS
 
 
@@ -229,6 +235,28 @@ class SharedChecklistDomainTests(TestCase):
         with self.assertRaises(ValidationError):
             self.definition.save()
 
+    def test_unused_definition_category_can_change(self):
+        other_category = StaffCategory.objects.create(
+            name="Other", slug="unused-other", sort_order=20
+        )
+
+        self.definition.category = other_category
+        self.definition.save(update_fields=("category",))
+
+        self.definition.refresh_from_db()
+        self.assertEqual(self.definition.category, other_category)
+
+    def test_unused_definition_shift_can_change(self):
+        other_shift = Shift.objects.create(
+            name="15:00–23:00", start_time=time(15), end_time=time(23), sort_order=20
+        )
+
+        self.definition.shift = other_shift
+        self.definition.save(update_fields=("shift",))
+
+        self.definition.refresh_from_db()
+        self.assertEqual(self.definition.shift, other_shift)
+
     def test_database_constraint_prevents_duplicate_operational_checklist(self):
         instance = resolve_checklist(self.definition, self.operational_date)
 
@@ -290,6 +318,39 @@ class SharedChecklistDomainTests(TestCase):
         self.assertEqual(item.current_state, TaskState.PENDING)
         self.assertFalse(item.contributions.exists())
 
+    def test_anonymous_user_cannot_post_state_change(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.regular_task)
+
+        response = self.client.post(
+            reverse("update-item-state", args=(item.id,)),
+            {"state": TaskState.COMPLETED, "date": self.operational_date.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, TaskState.PENDING)
+        self.assertEqual(item.contributions.count(), 0)
+
+    def test_deactivated_user_cannot_post_state_change(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.regular_task)
+        self.client.force_login(self.staff_a)
+        self.staff_a.is_active = False
+        self.staff_a.save(update_fields=("is_active",))
+
+        response = self.client.post(
+            reverse("update-item-state", args=(item.id,)),
+            {"state": TaskState.COMPLETED, "date": self.operational_date.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, TaskState.PENDING)
+        self.assertEqual(item.contributions.count(), 0)
+
     def test_inactive_configuration_rejects_direct_state_change_posts(self):
         instance = resolve_checklist(self.definition, self.operational_date)
         item = instance.items.get(source_task=self.regular_task)
@@ -306,6 +367,7 @@ class SharedChecklistDomainTests(TestCase):
             with self.subTest(model=type(configured_object).__name__):
                 configured_object.is_active = False
                 configured_object.save(update_fields=("is_active",))
+                contribution_count = item.contributions.count()
                 response = self.client.post(
                     reverse("update-item-state", args=(item.id,)),
                     {
@@ -316,8 +378,83 @@ class SharedChecklistDomainTests(TestCase):
                 self.assertEqual(response.status_code, 403)
                 item.refresh_from_db()
                 self.assertEqual(item.current_state, TaskState.PENDING)
+                self.assertEqual(item.contributions.count(), contribution_count)
                 configured_object.is_active = True
                 configured_object.save(update_fields=("is_active",))
+
+
+class SQLiteRetryPolicyTests(SimpleTestCase):
+    def test_lock_error_is_retried_until_operation_succeeds(self):
+        attempts = 0
+
+        def operation():
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise OperationalError("database is locked")
+            return "completed"
+
+        with (
+            patch("checklists.services.connection") as mocked_connection,
+            patch("checklists.services.time.sleep") as mocked_sleep,
+        ):
+            mocked_connection.vendor = "sqlite"
+            result = _run_serialized_write(operation)
+
+        self.assertEqual(result, "completed")
+        self.assertEqual(attempts, 3)
+        self.assertEqual(
+            mocked_sleep.call_args_list,
+            [
+                call(SQLITE_LOCK_BACKOFF_SECONDS),
+                call(SQLITE_LOCK_BACKOFF_SECONDS * 2),
+            ],
+        )
+
+    def test_unrelated_operational_error_is_not_retried(self):
+        attempts = 0
+
+        def operation():
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("disk I/O error")
+
+        with (
+            patch("checklists.services.connection") as mocked_connection,
+            patch("checklists.services.time.sleep") as mocked_sleep,
+        ):
+            mocked_connection.vendor = "sqlite"
+            with self.assertRaisesMessage(OperationalError, "disk I/O error"):
+                _run_serialized_write(operation)
+
+        self.assertEqual(attempts, 1)
+        mocked_sleep.assert_not_called()
+
+    def test_persistent_lock_error_stops_at_configured_attempt_limit(self):
+        attempts = 0
+
+        def operation():
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("database is locked")
+
+        with (
+            patch("checklists.services.connection") as mocked_connection,
+            patch("checklists.services.time.sleep") as mocked_sleep,
+        ):
+            mocked_connection.vendor = "sqlite"
+            with self.assertRaisesMessage(OperationalError, "database is locked"):
+                _run_serialized_write(operation)
+
+        self.assertEqual(attempts, SQLITE_LOCK_ATTEMPTS)
+        self.assertEqual(mocked_sleep.call_count, SQLITE_LOCK_ATTEMPTS - 1)
+        self.assertEqual(
+            mocked_sleep.call_args_list,
+            [
+                call(SQLITE_LOCK_BACKOFF_SECONDS * attempt)
+                for attempt in range(1, SQLITE_LOCK_ATTEMPTS)
+            ],
+        )
 
 
 class ConcurrentChecklistTests(TransactionTestCase):

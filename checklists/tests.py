@@ -1,6 +1,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time
+from io import StringIO
 from threading import Barrier
 from unittest.mock import patch
 
@@ -23,6 +24,7 @@ from .models import (
     TaskState,
 )
 from .services import change_item_state, resolve_checklist
+from .seed_data import DEFINITIONS, LIFE_SKILLS_SLOTS
 
 
 class SharedChecklistDomainTests(TestCase):
@@ -415,6 +417,25 @@ class SeedConfigurationTests(TestCase):
         call_command("seed_development", verbosity=0)
 
     def test_seed_is_repeatable_and_does_not_create_kevin_account(self):
+        original_test_password = get_user_model().objects.get(username="teststaff").password
+        original_admin_password = get_user_model().objects.get(username="choreadmin").password
+        day_shift = Shift.objects.get(seed_key="shift-day")
+        day_shift_id = day_shift.pk
+        day_shift.name = "Edited day shift"
+        day_shift.start_time = time(6)
+        day_shift.end_time = time(14)
+        day_shift.save()
+        section = ChecklistSection.objects.get(seed_key="section-support-day-01")
+        section_id = section.pk
+        section.name = "Edited section"
+        section.sort_order = 15
+        section.save()
+        task = TaskDefinition.objects.get(seed_key="task-support-day-01-001")
+        task_id = task.pk
+        task.label = "Edited task"
+        task.sort_order = 15
+        task.save()
+
         with patch.dict(
             os.environ,
             {
@@ -429,19 +450,130 @@ class SeedConfigurationTests(TestCase):
         self.assertEqual(User.objects.filter(username="choreadmin").count(), 1)
         self.assertFalse(User.objects.filter(first_name="Kevin", last_name="Atlee").exists())
         self.assertEqual(StaffCategory.objects.count(), 4)
+        self.assertEqual(Shift.objects.count(), 4)
         self.assertEqual(ChecklistDefinition.objects.count(), 7)
+        self.assertEqual(ChecklistSection.objects.count(), 19)
+        self.assertEqual(TaskDefinition.objects.count(), 190)
+        self.assertEqual(TaskDefinition.objects.filter(is_active=True).count(), 190)
+        day_shift.refresh_from_db()
+        section.refresh_from_db()
+        task.refresh_from_db()
+        self.assertEqual(day_shift.pk, day_shift_id)
+        self.assertEqual(day_shift.name, "07:00–15:00")
+        self.assertEqual(day_shift.start_time, time(7))
+        self.assertEqual(day_shift.end_time, time(15))
+        self.assertEqual(section.pk, section_id)
+        self.assertEqual(section.name, "Office Responsibilities")
+        self.assertEqual(section.sort_order, 10)
+        self.assertEqual(task.pk, task_id)
+        self.assertEqual(task.label, "Carry cell phone, fanny pack")
+        self.assertEqual(task.sort_order, 10)
+        self.assertEqual(User.objects.get(username="teststaff").password, original_test_password)
+        self.assertEqual(User.objects.get(username="choreadmin").password, original_admin_password)
 
     def test_life_skills_seed_has_no_items_after_1500(self):
         definition = ChecklistDefinition.objects.get(category__slug="life-skills")
         tasks = TaskDefinition.objects.filter(section__definition=definition)
 
-        self.assertEqual(tasks.count(), 55)
+        self.assertEqual(tasks.count(), 40)
         self.assertFalse(tasks.filter(scheduled_end__gt=time(15, 0)).exists())
 
-        # 2026-09-15 is a Tuesday; only that weekday's 11 schedule items are snapshotted.
+        # 2026-09-15 is a Tuesday; only that weekday's eight active items are snapshotted.
         instance = resolve_checklist(definition, date(2026, 9, 15))
-        self.assertEqual(instance.items.count(), 11)
+        self.assertEqual(instance.items.count(), 8)
         self.assertFalse(instance.items.filter(scheduled_end_snapshot__gt=time(15, 0)).exists())
+
+    def test_seed_matches_all_source_backed_labels_and_life_skills_schedule(self):
+        for category_key, shift_key, _, _, expected_sections in DEFINITIONS:
+            definition = ChecklistDefinition.objects.get(
+                seed_key=f"definition-{category_key}-{shift_key}"
+            )
+            actual_sections = definition.sections.filter(is_active=True).order_by("sort_order")
+            self.assertEqual(
+                [section.name for section in actual_sections],
+                [name for name, _ in expected_sections],
+            )
+            for section, (_, expected_labels) in zip(actual_sections, expected_sections):
+                self.assertEqual(
+                    list(
+                        section.tasks.filter(is_active=True).order_by("sort_order").values_list(
+                            "label", flat=True
+                        )
+                    ),
+                    expected_labels,
+                )
+
+        life_definition = ChecklistDefinition.objects.get(
+            seed_key="definition-life-skills-life-skills-day"
+        )
+        life_tasks = TaskDefinition.objects.filter(
+            section__definition=life_definition, is_active=True
+        )
+        for order, (slot_key, start, end, labels) in enumerate(
+            LIFE_SKILLS_SLOTS, start=1
+        ):
+            for weekday, label in enumerate(labels):
+                task = life_tasks.get(seed_key=f"task-life-skills-{slot_key}-{weekday}")
+                self.assertEqual(task.label, label)
+                self.assertEqual(task.sort_order, order * 10)
+                self.assertEqual(task.weekday, weekday)
+                self.assertEqual(task.scheduled_start, time.fromisoformat(start))
+                self.assertEqual(task.scheduled_end, time.fromisoformat(end))
+
+    def test_removed_life_skills_rows_are_retired_not_restored(self):
+        life_section = ChecklistSection.objects.get(
+            seed_key="section-life-skills-life-skills-day-01"
+        )
+        removed_task = TaskDefinition.objects.create(
+            section=life_section,
+            weekday=0,
+            sort_order=500,
+            label="Break",
+            scheduled_start=time(10),
+            scheduled_end=time(10, 15),
+        )
+
+        call_command("seed_development", verbosity=0)
+
+        removed_task.refresh_from_db()
+        self.assertFalse(removed_task.is_active)
+        self.assertEqual(
+            removed_task.seed_key, "task-life-skills-retired-break-1000-0"
+        )
+        self.assertFalse(
+            TaskDefinition.objects.filter(
+                section=life_section,
+                is_active=True,
+                scheduled_start__in=(time(10), time(10, 15), time(12), time(14, 30)),
+            ).exists()
+        )
+
+    def test_seed_without_password_variables_does_not_warn_for_usable_accounts(self):
+        output = StringIO()
+        with patch.dict(
+            os.environ,
+            {"CHORE_TEST_STAFF_PASSWORD": "", "CHORE_ADMIN_PASSWORD": ""},
+        ):
+            call_command("seed_development", stdout=output, verbosity=0)
+
+        self.assertNotIn("has no usable password", output.getvalue())
+
+    def test_overnight_operational_date_is_the_shift_start_date(self):
+        definition = ChecklistDefinition.objects.get(
+            seed_key="definition-awake-night-overnight"
+        )
+        shift_start_date = date(2026, 9, 15)
+
+        instance = resolve_checklist(definition, shift_start_date)
+
+        self.assertTrue(definition.shift.crosses_midnight)
+        self.assertEqual(instance.operational_date, shift_start_date)
+        test_staff = get_user_model().objects.get(username="teststaff")
+        self.client.force_login(test_staff)
+        response = self.client.get(reverse("dashboard"))
+        self.assertContains(
+            response, "For an overnight shift, use the date on which the shift starts."
+        )
 
     def test_seeded_test_staff_is_assigned_to_all_categories(self):
         test_staff = get_user_model().objects.get(username="teststaff")

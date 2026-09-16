@@ -9,6 +9,7 @@
     </div>
     <form method="get" class="date-form">
       <label for="date">Operational date</label>
+      <p class="field-help">For an overnight shift, use the date on which the shift starts.</p>
       <div class="field-row">
         <input id="date" name="date" type="date" value="{{ operational_date|date:'Y-m-d' }}" required>
         <button class="button secondary" type="submit">Change date</button>
@@ -32,4 +33,3 @@
     {% endfor %}
   </div>
 {% endblock %}
-

@@ -27,6 +27,9 @@ class StaffCategory(ActiveOrderedModel):
 
 
 class Shift(ActiveOrderedModel):
+    seed_key = models.SlugField(
+        max_length=120, unique=True, null=True, blank=True, editable=False
+    )
     start_time = models.TimeField()
     end_time = models.TimeField()
 
@@ -43,6 +46,9 @@ class Shift(ActiveOrderedModel):
 
 
 class ChecklistDefinition(ActiveOrderedModel):
+    seed_key = models.SlugField(
+        max_length=160, unique=True, null=True, blank=True, editable=False
+    )
     category = models.ForeignKey(
         StaffCategory, on_delete=models.PROTECT, related_name="checklist_definitions"
     )
@@ -90,6 +96,9 @@ class ChecklistDefinition(ActiveOrderedModel):
 
 
 class ChecklistSection(ActiveOrderedModel):
+    seed_key = models.SlugField(
+        max_length=200, unique=True, null=True, blank=True, editable=False
+    )
     definition = models.ForeignKey(
         ChecklistDefinition, on_delete=models.PROTECT, related_name="sections"
     )
@@ -116,6 +125,9 @@ class Weekday(models.IntegerChoices):
 
 
 class TaskDefinition(models.Model):
+    seed_key = models.SlugField(
+        max_length=240, unique=True, null=True, blank=True, editable=False
+    )
     section = models.ForeignKey(
         ChecklistSection, on_delete=models.PROTECT, related_name="tasks"
     )

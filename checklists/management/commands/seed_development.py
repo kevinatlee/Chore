@@ -18,6 +18,7 @@ from checklists.seed_data import (
     CATEGORIES,
     DEFINITIONS,
     LIFE_SKILLS_SLOTS,
+    RETIRED_LIFE_SKILLS_SLOTS,
     SHIFTS,
 )
 
@@ -48,42 +49,90 @@ class Command(BaseCommand):
 
         shifts = {}
         for key, name, start, end, sort_order in SHIFTS:
-            shift, _ = Shift.objects.update_or_create(
-                start_time=parse_time(start),
-                end_time=parse_time(end),
-                defaults={"name": name, "sort_order": sort_order, "is_active": True},
+            shift = self._upsert_seeded(
+                Shift,
+                seed_key=f"shift-{key}",
+                legacy_lookup={
+                    "start_time": parse_time(start),
+                    "end_time": parse_time(end),
+                },
+                defaults={
+                    "name": name,
+                    "start_time": parse_time(start),
+                    "end_time": parse_time(end),
+                    "sort_order": sort_order,
+                    "is_active": True,
+                },
             )
             shifts[key] = shift
 
         for category_key, shift_key, name, sort_order, sections in DEFINITIONS:
-            definition, _ = ChecklistDefinition.objects.update_or_create(
-                category=categories[category_key],
-                shift=shifts[shift_key],
-                defaults={"name": name, "sort_order": sort_order, "is_active": True},
+            definition = self._upsert_seeded(
+                ChecklistDefinition,
+                seed_key=f"definition-{category_key}-{shift_key}",
+                legacy_lookup={
+                    "category": categories[category_key],
+                    "shift": shifts[shift_key],
+                },
+                defaults={
+                    "name": name,
+                    "category": categories[category_key],
+                    "shift": shifts[shift_key],
+                    "sort_order": sort_order,
+                    "is_active": True,
+                },
             )
-            self._seed_standard_sections(definition, sections)
+            self._seed_standard_sections(
+                definition, category_key, shift_key, sections
+            )
 
-        life_definition, _ = ChecklistDefinition.objects.update_or_create(
-            category=categories["life-skills"],
-            shift=shifts["life-skills-day"],
+        life_definition = self._upsert_seeded(
+            ChecklistDefinition,
+            seed_key="definition-life-skills-life-skills-day",
+            legacy_lookup={
+                "category": categories["life-skills"],
+                "shift": shifts["life-skills-day"],
+            },
             defaults={
                 "name": "Life Skills Weekday Schedule",
+                "category": categories["life-skills"],
+                "shift": shifts["life-skills-day"],
                 "sort_order": 10,
                 "is_active": True,
             },
         )
-        life_section, _ = ChecklistSection.objects.update_or_create(
-            definition=life_definition,
-            sort_order=10,
-            defaults={"name": "Weekday Schedule", "is_active": True},
+        life_section = self._upsert_seeded(
+            ChecklistSection,
+            seed_key="section-life-skills-life-skills-day-01",
+            legacy_lookup={"definition": life_definition, "sort_order": 10},
+            defaults={
+                "definition": life_definition,
+                "name": "Weekday Schedule",
+                "sort_order": 10,
+                "is_active": True,
+            },
         )
-        for order, (start, end, labels) in enumerate(LIFE_SKILLS_SLOTS, start=1):
+        self._retire_removed_life_skills(life_section)
+        active_life_skill_keys = []
+        for order, (slot_key, start, end, labels) in enumerate(
+            LIFE_SKILLS_SLOTS, start=1
+        ):
             for weekday, label in enumerate(labels):
-                TaskDefinition.objects.update_or_create(
-                    section=life_section,
-                    weekday=weekday,
-                    sort_order=order * 10,
+                task_key = f"task-life-skills-{slot_key}-{weekday}"
+                active_life_skill_keys.append(task_key)
+                self._upsert_seeded(
+                    TaskDefinition,
+                    seed_key=task_key,
+                    legacy_lookup={
+                        "section": life_section,
+                        "weekday": weekday,
+                        "scheduled_start": parse_time(start),
+                        "scheduled_end": parse_time(end),
+                    },
                     defaults={
+                        "section": life_section,
+                        "weekday": weekday,
+                        "sort_order": order * 10,
                         "label": label,
                         "allow_na": False,
                         "is_active": True,
@@ -91,6 +140,9 @@ class Command(BaseCommand):
                         "scheduled_end": parse_time(end),
                     },
                 )
+        life_section.tasks.filter(seed_key__startswith="task-life-skills-").exclude(
+            seed_key__in=active_life_skill_keys
+        ).update(is_active=False)
 
         test_staff = self._seed_user(
             username="teststaff",
@@ -101,7 +153,7 @@ class Command(BaseCommand):
             password_env="CHORE_TEST_STAFF_PASSWORD",
             reset_passwords=options["reset_passwords"],
         )
-        self._seed_user(
+        admin_user = self._seed_user(
             username="choreadmin",
             first_name="Development",
             last_name="Admin",
@@ -117,17 +169,24 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                "Seeded Test Staff, development admin, 4 categories, 4 shifts, and 7 checklists."
+                "Seeded Test Staff, development admin, 4 categories, 4 shifts, "
+                "7 checklists, and 190 active tasks (40 Life Skills)."
             )
         )
-        if not os.environ.get("CHORE_TEST_STAFF_PASSWORD"):
+        if (
+            not os.environ.get("CHORE_TEST_STAFF_PASSWORD")
+            and not test_staff.has_usable_password()
+        ):
             self.stdout.write(
                 self.style.WARNING(
                     "Test Staff has no usable password. Set CHORE_TEST_STAFF_PASSWORD and rerun "
                     "with --reset-passwords."
                 )
             )
-        if not os.environ.get("CHORE_ADMIN_PASSWORD"):
+        if (
+            not os.environ.get("CHORE_ADMIN_PASSWORD")
+            and not admin_user.has_usable_password()
+        ):
             self.stdout.write(
                 self.style.WARNING(
                     "Development Admin has no usable password. Set CHORE_ADMIN_PASSWORD and rerun "
@@ -135,19 +194,43 @@ class Command(BaseCommand):
                 )
             )
 
-    def _seed_standard_sections(self, definition, sections):
+    def _seed_standard_sections(
+        self, definition, category_key, shift_key, sections
+    ):
         for section_order, (section_name, labels) in enumerate(sections, start=1):
-            section, _ = ChecklistSection.objects.update_or_create(
-                definition=definition,
-                sort_order=section_order * 10,
-                defaults={"name": section_name, "is_active": True},
+            section_key = (
+                f"section-{category_key}-{shift_key}-{section_order:02d}"
             )
+            section = self._upsert_seeded(
+                ChecklistSection,
+                seed_key=section_key,
+                legacy_lookup={
+                    "definition": definition,
+                    "sort_order": section_order * 10,
+                },
+                defaults={
+                    "definition": definition,
+                    "name": section_name,
+                    "sort_order": section_order * 10,
+                    "is_active": True,
+                },
+            )
+            active_task_keys = []
             for task_order, label in enumerate(labels, start=1):
-                TaskDefinition.objects.update_or_create(
-                    section=section,
-                    weekday=None,
-                    sort_order=task_order * 10,
+                task_key = f"task-{category_key}-{shift_key}-{section_order:02d}-{task_order:03d}"
+                active_task_keys.append(task_key)
+                self._upsert_seeded(
+                    TaskDefinition,
+                    seed_key=task_key,
+                    legacy_lookup={
+                        "section": section,
+                        "weekday": None,
+                        "sort_order": task_order * 10,
+                    },
                     defaults={
+                        "section": section,
+                        "weekday": None,
+                        "sort_order": task_order * 10,
                         "label": label,
                         "allow_na": label in ALLOW_NA_LABELS,
                         "is_active": True,
@@ -155,6 +238,45 @@ class Command(BaseCommand):
                         "scheduled_end": None,
                     },
                 )
+            section.tasks.filter(seed_key__startswith=f"task-{category_key}-{shift_key}-").exclude(
+                seed_key__in=active_task_keys
+            ).update(is_active=False)
+
+    def _retire_removed_life_skills(self, life_section):
+        for retired_order, (slot_key, start, end) in enumerate(
+            RETIRED_LIFE_SKILLS_SLOTS, start=1
+        ):
+            for weekday in range(5):
+                task_key = f"task-life-skills-retired-{slot_key}-{weekday}"
+                task = TaskDefinition.objects.filter(seed_key=task_key).first()
+                if task is None:
+                    task = TaskDefinition.objects.filter(
+                        seed_key__isnull=True,
+                        section=life_section,
+                        weekday=weekday,
+                        scheduled_start=parse_time(start),
+                        scheduled_end=parse_time(end),
+                    ).first()
+                if task is not None:
+                    task.seed_key = task_key
+                    task.is_active = False
+                    task.sort_order = 1000 + (retired_order * 10)
+                    task.save(update_fields=("seed_key", "is_active", "sort_order"))
+
+    def _upsert_seeded(self, model, *, seed_key, legacy_lookup, defaults):
+        instance = model.objects.filter(seed_key=seed_key).first()
+        if instance is None:
+            instance = model.objects.filter(
+                seed_key__isnull=True, **legacy_lookup
+            ).first()
+        if instance is None:
+            return model.objects.create(seed_key=seed_key, **defaults)
+
+        instance.seed_key = seed_key
+        for field, value in defaults.items():
+            setattr(instance, field, value)
+        instance.save()
+        return instance
 
     def _seed_user(
         self,
@@ -181,4 +303,3 @@ class Command(BaseCommand):
             user.set_unusable_password()
         user.save()
         return user
-

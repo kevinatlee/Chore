@@ -250,10 +250,12 @@ DEFINITIONS = [
     ("awake-night", "overnight", "Awake Night Checklist", 10, AWAKE_NIGHT),
 ]
 
-# The source continues beyond 15:00. Chore intentionally stops at the 14:30–14:45 row.
+# Blank rows in the revised source are intentionally omitted. The 14:45–15:45
+# source row is truncated to Chore's 15:00 cutoff; later rows are excluded.
 LIFE_SKILLS_SLOTS = [
-    ("08:00", "08:30", ["Daily planning, wish notes, emails, training"] * 5),
+    ("planning", "08:00", "08:30", ["Daily planning, wish notes, emails, training"] * 5),
     (
+        "documentation",
         "08:30",
         "09:00",
         [
@@ -264,12 +266,15 @@ LIFE_SKILLS_SLOTS = [
             "Documentation, quick tenant support tasks",
         ],
     ),
-    ("09:00", "10:00", ["Morning Rides"] * 5),
-    ("10:00", "10:15", ["Break"] * 5),
-    ("10:15", "11:15", ["In-unit cleaning & life skills support"] * 5),
-    ("11:15", "12:00", ["Documentation/ Tenant Support"] * 5),
-    ("12:00", "12:30", ["Lunch"] * 5),
+    ("morning-rides", "09:00", "10:00", ["Morning Rides"] * 5),
     (
+        "documentation-support",
+        "11:15",
+        "12:00",
+        ["Documentation/ Tenant Support"] * 5,
+    ),
+    (
+        "email-office",
         "12:30",
         "13:00",
         [
@@ -281,20 +286,40 @@ LIFE_SKILLS_SLOTS = [
         ],
     ),
     (
+        "afternoon",
         "13:00",
         "14:00",
         [
             "Afternoon Rides",
-            "Weekly Inspections (1:00–2:30 PM)",
+            "Weekly Inspections",
             "Afternoon Rides",
             "Afternoon Rides",
             "Afternoon Rides",
         ],
     ),
     (
+        "form-updates",
         "14:00",
         "14:30",
         ["Form Updates", "Continue Inspections", "Form Updates", "Form Updates", "Form Updates"],
     ),
-    ("14:30", "14:45", ["Break"] * 5),
+    (
+        "cleaning-support",
+        "14:45",
+        "15:00",
+        [
+            "Cleaning support OR Unit prep for move-ins",
+            "Inspection Report Writing",
+            "Cleaning support OR Unit prep for move-ins",
+            "Cleaning support OR Unit prep for move-ins",
+            "Cleaning support OR Unit prep for move-ins",
+        ],
+    ),
+]
+
+RETIRED_LIFE_SKILLS_SLOTS = [
+    ("break-1000", "10:00", "10:15"),
+    ("in-unit-cleaning", "10:15", "11:15"),
+    ("lunch", "12:00", "12:30"),
+    ("break-1430", "14:30", "14:45"),
 ]

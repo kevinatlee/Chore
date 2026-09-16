@@ -168,7 +168,7 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
         )
         self.assertEqual(self.report_a()["totals"]["completed"], 1)
 
-    def test_staff_filter_uses_staff_member_identity(self):
+    def test_report_filter_uses_operational_staff_identity(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
         self.contribute(
             instance.items.get(source_task=self.regular_a),

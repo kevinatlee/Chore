@@ -52,7 +52,6 @@ def correct_data(apps, schema_editor):
     ChecklistSection = apps.get_model("checklists", "ChecklistSection")
     TaskDefinition = apps.get_model("checklists", "TaskDefinition")
     StaffContribution = apps.get_model("checklists", "StaffContribution")
-    ScheduledReportDelivery = apps.get_model("checklists", "ScheduledReportDelivery")
 
     program, _ = Program.objects.get_or_create(
         slug="sonder-house", defaults={"name": "Sonder House", "is_active": True}
@@ -68,13 +67,6 @@ def correct_data(apps, schema_editor):
                 "is_active": True,
             },
         )
-
-    test_user = User.objects.filter(username="teststaff").first()
-    if test_user:
-        test_contribution_ids = StaffContribution.objects.filter(
-            recorded_by_id=test_user.pk
-        ).values_list("pk", flat=True)
-        StaffContribution.objects.filter(pk__in=test_contribution_ids).delete()
 
     staff_cache = {}
     for contribution in StaffContribution.objects.select_related(
@@ -167,31 +159,6 @@ def correct_data(apps, schema_editor):
                 instance.save(update_fields=("seed_key",))
 
     ProgramMembership.objects.filter(role="staff").update(role="operational")
-    if test_user:
-        operational_user = User.objects.filter(username="sonderhouse").first()
-        if operational_user and operational_user.pk != test_user.pk:
-            ProgramMembership.objects.filter(user=test_user).delete()
-            StaffAssignment.objects.filter(user=test_user).delete()
-            ScheduledReportDelivery.objects.filter(recipient=test_user).delete()
-            test_user.delete()
-        else:
-            test_user.username = "sonderhouse"
-            test_user.first_name = "Sonder House"
-            test_user.last_name = "Operations"
-            test_user.is_staff = False
-            test_user.is_superuser = False
-            test_user.is_active = True
-            test_user.save()
-            ProgramMembership.objects.update_or_create(
-                user=test_user,
-                program=program,
-                defaults={
-                    "role": "operational",
-                    "is_active": True,
-                    "is_test_staff": False,
-                    "receive_scheduled_reports": False,
-                },
-            )
     StaffAssignment.objects.all().delete()
 
 
@@ -240,7 +207,6 @@ class Migration(migrations.Migration):
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name="current_checklist_items", to="checklists.staffmember"),
         ),
         migrations.RunPython(correct_data, migrations.RunPython.noop),
-        migrations.RemoveField(model_name="programmembership", name="is_test_staff"),
         migrations.AlterField(
             model_name="programmembership",
             name="role",

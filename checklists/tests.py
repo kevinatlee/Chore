@@ -11,12 +11,13 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, OperationalError, close_old_connections, models, transaction
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import Client, SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
+    ChecklistItem,
     ChecklistSection,
     Program,
     ProgramMembership,
@@ -506,10 +507,156 @@ class ConcurrentChecklistTests(OperationalFixtureMixin, TransactionTestCase):
         )
         history = list(item.contributions.order_by("created_at", "id"))
         self.assertEqual(len(history), 2)
+        self.assertEqual({entry.staff_id for entry in history}, {self.staff_a.pk, self.staff_b.pk})
         self.assertEqual(history[0].previous_state, TaskState.PENDING)
         self.assertEqual(history[1].previous_state, history[0].new_state)
         item.refresh_from_db()
         self.assertEqual(item.current_state, history[1].new_state)
+        self.assertEqual(item.current_staff_id, history[1].staff_id)
+
+
+class SharedChecklistSynchronizationTests(OperationalFixtureMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.instance = resolve_checklist(self.definition, self.operational_date)
+        self.regular_item = self.instance.items.get(source_task=self.regular)
+        self.optional_item = self.instance.items.get(source_task=self.optional)
+        self.client_a = Client()
+        self.client_b = Client()
+        self.client_a.force_login(self.operator)
+        self.client_b.force_login(self.operator)
+
+    def _state_url(self):
+        return reverse("checklist-state", args=(self.definition.pk,))
+
+    def _ajax_change(self, client, item, staff, state):
+        return client.post(
+            reverse("update-item-state", args=(item.pk,)),
+            {"state": state, "staff": staff.pk},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            HTTP_ACCEPT="application/json",
+        )
+
+    def test_two_staff_sessions_converge_through_canonical_state(self):
+        detail_a = self.client_a.get(
+            reverse("checklist-detail", args=(self.definition.pk,)),
+            {"date": self.operational_date, "staff": self.staff_a.pk},
+        )
+        detail_b = self.client_b.get(
+            reverse("checklist-detail", args=(self.definition.pk,)),
+            {"date": self.operational_date, "staff": self.staff_b.pk},
+        )
+        self.assertEqual(detail_a.context["instance"].pk, detail_b.context["instance"].pk)
+        self.assertContains(detail_a, "This Chore List is shared.")
+        self.assertContains(detail_a, "checklist_sync.js")
+
+        response_a = self._ajax_change(
+            self.client_a, self.regular_item, self.staff_a, TaskState.COMPLETED
+        )
+        self.assertEqual(response_a.status_code, 200)
+        first_state = response_a.json()
+        regular = next(item for item in first_state["items"] if item["id"] == self.regular_item.pk)
+        self.assertEqual(regular["state"], TaskState.COMPLETED)
+        self.assertEqual(regular["staff_name"], self.staff_a.display_name)
+
+        poll_b = self.client_b.get(
+            self._state_url(),
+            {"date": self.operational_date, "revision": "0"},
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(poll_b.status_code, 200)
+        self.assertTrue(poll_b.json()["changed"])
+        self.assertEqual(poll_b.json()["revision"], first_state["revision"])
+
+        response_b = self._ajax_change(
+            self.client_b, self.optional_item, self.staff_b, TaskState.NOT_APPLICABLE
+        )
+        self.assertEqual(response_b.status_code, 200)
+        canonical = response_b.json()
+        by_id = {item["id"]: item for item in canonical["items"]}
+        self.assertEqual(by_id[self.regular_item.pk]["state"], TaskState.COMPLETED)
+        self.assertEqual(by_id[self.regular_item.pk]["staff_name"], self.staff_a.display_name)
+        self.assertEqual(by_id[self.optional_item.pk]["state"], TaskState.NOT_APPLICABLE)
+        self.assertEqual(by_id[self.optional_item.pk]["staff_name"], self.staff_b.display_name)
+        self.assertEqual(canonical["resolved_count"], 2)
+
+        poll_a = self.client_a.get(
+            self._state_url(),
+            {"date": self.operational_date, "revision": first_state["revision"]},
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertTrue(poll_a.json()["changed"])
+        self.assertEqual(poll_a.json()["revision"], canonical["revision"])
+        unchanged = self.client_a.get(
+            self._state_url(),
+            {"date": self.operational_date, "revision": canonical["revision"]},
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(unchanged.json(), {"changed": False, "revision": canonical["revision"]})
+
+    def test_sync_endpoint_preserves_program_and_role_boundaries(self):
+        operational_response = self.client_a.get(
+            self._state_url(), {"date": self.operational_date}
+        )
+        self.assertEqual(operational_response.status_code, 200)
+
+        manager_client = Client()
+        manager_client.force_login(self.manager)
+        manager_response = manager_client.get(
+            self._state_url(), {"date": self.operational_date}
+        )
+        self.assertEqual(manager_response.status_code, 403)
+
+        admin_client = Client()
+        admin_client.force_login(self.admin)
+        admin_response = admin_client.get(
+            self._state_url(), {"date": self.operational_date}
+        )
+        self.assertEqual(admin_response.status_code, 200)
+
+        other_program = Program.objects.create(name="Other Program", slug="other-program")
+        other_category = StaffCategory.objects.create(
+            program=other_program, name="Other", slug="other", sort_order=10
+        )
+        other_definition = ChecklistDefinition.objects.create(
+            name="Other Morning", category=other_category, shift=self.shift, sort_order=10
+        )
+        other_section = ChecklistSection.objects.create(
+            definition=other_definition, name="Other section", sort_order=10
+        )
+        TaskDefinition.objects.create(section=other_section, label="Other task", sort_order=10)
+        resolve_checklist(other_definition, self.operational_date)
+        cross_program = self.client_a.get(
+            reverse("checklist-state", args=(other_definition.pk,)),
+            {"date": self.operational_date},
+        )
+        self.assertEqual(cross_program.status_code, 403)
+
+
+class AdministrationClarityTests(OperationalFixtureMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+
+    def test_admin_configuration_explains_consequences_and_routing(self):
+        index = self.client.get(reverse("admin:index"))
+        self.assertContains(index, "Configuration affects future Chore Lists.")
+        self.assertContains(index, "preserving historical Chore Lists")
+
+        task_page = self.client.get(reverse("admin:checklists_taskdefinition_add"))
+        self.assertContains(task_page, "Allow staff to choose N/A")
+        self.assertContains(task_page, "The setting is copied into each new Chore List snapshot.")
+        self.assertContains(task_page, "admin_clarity.js")
+
+        membership_page = self.client.get(reverse("admin:checklists_programmembership_add"))
+        self.assertContains(membership_page, "Access and email routing")
+        self.assertContains(membership_page, "Managers with an active account and active membership")
+
+        staff_page = self.client.get(
+            reverse("admin:checklists_staffmember_change", args=(self.staff_a.pk,))
+        )
+        self.assertContains(staff_page, "this is not a sign-in account")
+        self.assertContains(staff_page, "Existing Staff Contributions")
 
 
 class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
@@ -542,7 +689,7 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertEqual(ChecklistDefinition.__name__, "ChecklistDefinition")
         self.assertEqual(ChecklistInstance.__name__, "ChecklistInstance")
 
-    def test_staff_and_date_survive_position_and_shift_selection(self):
+    def test_selected_person_and_date_survive_position_and_shift_selection(self):
         evening = Shift.objects.create(
             name="Evening", start_time=time(15), end_time=time(23), sort_order=20
         )
@@ -636,7 +783,7 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
-    def test_staff_selection_does_not_change_shared_checklist_identity(self):
+    def test_selected_person_does_not_change_shared_checklist_identity(self):
         self.client.force_login(self.operator)
         base = {
             "date": self.operational_date,
@@ -816,12 +963,11 @@ class SeedCorrectionTests(TestCase):
         self.addCleanup(self.environment.stop)
         call_command("seed_development", reset_passwords=True, verbosity=0)
 
-    def test_exact_staff_roster_has_no_authentication_accounts(self):
+    def test_exact_staff_roster_is_separate_from_authentication_accounts(self):
         expected = [tuple(name.split(" ", 1)) for name in STAFF_ROSTER]
         actual = list(StaffMember.objects.values_list("first_name", "last_name"))
         self.assertEqual(actual, expected)
         usernames = set(get_user_model().objects.values_list("username", flat=True))
-        self.assertNotIn("teststaff", usernames)
         self.assertTrue(usernames.isdisjoint(set(STAFF_ROSTER)))
         self.assertFalse(hasattr(StaffMember, "username"))
         self.assertFalse(hasattr(StaffMember, "password"))
@@ -994,12 +1140,35 @@ class MockDataTests(TestCase):
     def test_cleanup_removes_only_marked_operational_history(self):
         definition = ChecklistDefinition.objects.first()
         legitimate = resolve_checklist(definition, date(2020, 1, 1))
+        legitimate_item = legitimate.items.first()
+        legitimate_staff = StaffMember.objects.filter(
+            program=legitimate.program
+        ).first()
+        _, legitimate_contribution = change_item_state(
+            item_id=legitimate_item.pk,
+            actor=None,
+            staff_member=legitimate_staff,
+            new_state=TaskState.COMPLETED,
+            system=True,
+        )
         roster_count = StaffMember.objects.count()
         call_command("generate_mock_data", days=3, seed=99, verbosity=0)
         self.assertTrue(ChecklistInstance.objects.filter(is_mock_data=True).exists())
+        self.assertTrue(
+            StaffContribution.objects.filter(item__instance__is_mock_data=True).exists()
+        )
         call_command("generate_mock_data", clear=True, verbosity=0)
         self.assertTrue(ChecklistInstance.objects.filter(pk=legitimate.pk).exists())
+        self.assertTrue(ChecklistItem.objects.filter(pk=legitimate_item.pk).exists())
+        self.assertTrue(
+            StaffContribution.objects.filter(
+                pk=legitimate_contribution.pk
+            ).exists()
+        )
         self.assertFalse(ChecklistInstance.objects.filter(is_mock_data=True).exists())
+        self.assertFalse(
+            StaffContribution.objects.filter(item__instance__is_mock_data=True).exists()
+        )
         self.assertEqual(StaffMember.objects.count(), roster_count)
         self.assertEqual(ChecklistDefinition.objects.count(), 7)
 

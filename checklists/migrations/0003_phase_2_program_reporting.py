@@ -17,13 +17,6 @@ def assign_existing_program(apps, schema_editor):
     StaffCategory.objects.filter(program__isnull=True).update(program=program)
     ChecklistInstance.objects.filter(program__isnull=True).update(program=program)
 
-    test_staff = User.objects.filter(username="teststaff").first()
-    if test_staff:
-        ProgramMembership.objects.get_or_create(
-            user=test_staff,
-            program=program,
-            defaults={"role": "staff", "is_active": True, "is_test_staff": True},
-        )
     for user in User.objects.filter(is_staff=True, is_superuser=False):
         ProgramMembership.objects.get_or_create(
             user=user,
@@ -74,7 +67,6 @@ class Migration(migrations.Migration):
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
                 ("role", models.CharField(choices=[("staff", "Staff"), ("manager", "Manager")], max_length=16)),
                 ("is_active", models.BooleanField(default=True)),
-                ("is_test_staff", models.BooleanField(default=False)),
                 ("receive_scheduled_reports", models.BooleanField(default=False)),
                 ("program", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="memberships", to="checklists.program")),
                 ("user", models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name="program_memberships", to=settings.AUTH_USER_MODEL)),

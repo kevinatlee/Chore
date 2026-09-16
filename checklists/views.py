@@ -4,20 +4,22 @@ from datetime import date
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from .models import (
     ChecklistDefinition,
+    ChecklistInstance,
     ChecklistItem,
     StaffContribution,
     StaffMember,
     TaskState,
 )
 from .operational_dates import operational_entry_bounds, validate_operational_entry_date
+from .presentation import display_task_text
 from .services import (
     can_operate_program,
     change_item_state,
@@ -39,6 +41,84 @@ def _selected_date(request):
 
 def _selected_operational_date(request):
     return validate_operational_entry_date(_selected_date(request))
+
+
+def _active_definition_for_operator(request, definition_id):
+    definition = get_object_or_404(
+        ChecklistDefinition.objects.select_related("category__program", "shift"),
+        pk=definition_id,
+        is_active=True,
+        category__is_active=True,
+        category__program__is_active=True,
+        shift__is_active=True,
+    )
+    if not can_operate_program(request.user, definition.category.program_id):
+        raise PermissionDenied("Operational-entry access is required for this Program.")
+    return definition
+
+
+def _checklist_revision(instance):
+    latest_contribution_id = (
+        StaffContribution.objects.filter(item__instance=instance)
+        .order_by("-id")
+        .values_list("id", flat=True)
+        .first()
+    )
+    return str(latest_contribution_id or 0)
+
+
+def _checklist_state_payload(instance):
+    items = list(
+        instance.items.select_related("current_staff").order_by(
+            "section_order_snapshot",
+            "task_order_snapshot",
+            "scheduled_start_snapshot",
+            "id",
+        )
+    )
+    contributions = list(
+        StaffContribution.objects.filter(item__instance=instance)
+        .select_related("staff", "item")
+        .order_by("-created_at", "-id")[:10]
+    )
+    resolved_count = sum(item.current_state != TaskState.PENDING for item in items)
+    return {
+        "changed": True,
+        "revision": str(contributions[0].id) if contributions else "0",
+        "resolved_count": resolved_count,
+        "total_count": len(items),
+        "items": [
+            {
+                "id": item.id,
+                "state": item.current_state,
+                "state_label": item.get_current_state_display(),
+                "staff_name": item.current_staff.display_name if item.current_staff else "",
+                "changed_at": item.state_changed_at.isoformat() if item.state_changed_at else "",
+                "changed_at_label": (
+                    timezone.localtime(item.state_changed_at)
+                    .strftime("%b %d, %H:%M")
+                    .replace(" 0", " ")
+                    if item.state_changed_at
+                    else ""
+                ),
+            }
+            for item in items
+        ],
+        "contributions": [
+            {
+                "id": contribution.id,
+                "staff_name": contribution.staff.display_name,
+                "task_label": display_task_text(contribution.item.task_label_snapshot),
+                "previous_state_label": contribution.get_previous_state_display(),
+                "new_state_label": contribution.get_new_state_display(),
+                "created_at": contribution.created_at.isoformat(),
+                "created_at_label": timezone.localtime(contribution.created_at)
+                .strftime("%b %d, %Y %H:%M")
+                .replace(" 0", " "),
+            }
+            for contribution in contributions
+        ],
+    }
 
 
 @login_required
@@ -169,16 +249,7 @@ def open_checklist(request):
 
 @login_required
 def checklist_detail(request, definition_id):
-    definition = get_object_or_404(
-        ChecklistDefinition.objects.select_related("category__program", "shift"),
-        pk=definition_id,
-        is_active=True,
-        category__is_active=True,
-        category__program__is_active=True,
-        shift__is_active=True,
-    )
-    if not can_operate_program(request.user, definition.category.program_id):
-        raise PermissionDenied("Operational-entry access is required for this Program.")
+    definition = _active_definition_for_operator(request, definition_id)
     staff_member = get_object_or_404(
         StaffMember,
         pk=request.GET.get("staff"),
@@ -222,8 +293,31 @@ def checklist_detail(request, definition_id):
             "total_count": total_count,
             "completed_count": completed_count,
             "staff_member": staff_member,
+            "checklist_revision": _checklist_revision(instance),
         },
     )
+
+
+@login_required
+@require_GET
+def checklist_state(request, definition_id):
+    definition = _active_definition_for_operator(request, definition_id)
+    try:
+        operational_date = _selected_operational_date(request)
+    except ValidationError as exc:
+        return HttpResponseBadRequest(" ".join(exc.messages))
+    instance = get_object_or_404(
+        ChecklistInstance,
+        definition=definition,
+        operational_date=operational_date,
+        program=definition.category.program,
+        category=definition.category,
+        shift=definition.shift,
+    )
+    revision = _checklist_revision(instance)
+    if request.GET.get("revision") == revision:
+        return JsonResponse({"changed": False, "revision": revision})
+    return JsonResponse(_checklist_state_payload(instance))
 
 
 @login_required
@@ -234,7 +328,7 @@ def update_item_state(request, item_id):
         pk=item_id,
     )
     try:
-        _, contribution = change_item_state(
+        changed_item, contribution = change_item_state(
             item_id=item_id,
             actor=request.user,
             staff_member=get_object_or_404(
@@ -247,6 +341,9 @@ def update_item_state(request, item_id):
         )
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse(_checklist_state_payload(changed_item.instance))
 
     if contribution:
         messages.success(request, "Task updated and Staff Contribution recorded.")

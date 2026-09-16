@@ -59,6 +59,16 @@ Every meaningful item state change updates the current state and appends a `Staf
 
 The Django admin keeps Authentication Users separate from Operational Staff. Administrators can add, rename, deactivate, and reactivate roster records; delete is disabled so history is preserved. It also manages Program memberships, categories, shifts, definitions, tasks, and delivery records.
 
+Phase 3 adds plain-language field labels, section descriptions, active/inactive guidance, report-routing explanations, and focused confirmation prompts for deactivation and removal of future N/A eligibility. Deactivation prevents future operational use while preserving historical Chore Lists, snapshots, Staff Contributions, and sent-report records. Destructive bulk deletion is unavailable on the clarified configuration screens; Django's protected relationships and confirmation page continue to guard individual deletion. The legacy special-case roster identity and all associated flags, filtering, seed behavior, and migration handling have been removed; operational staff now follow one uniform model.
+
+## Shared Chore List synchronization
+
+Staff working the same Program + Position + Shift + operational date continue to use one shared `ChecklistInstance`. The staff page checks a Program-authorized JSON state endpoint every seven seconds while the page is visible and performs an immediate check when a background tab becomes visible. When the server revision has not changed, the endpoint returns only the unchanged revision, keeping polling payloads small.
+
+Task actions update the interface immediately, submit only the selected item state, and then replace the visible checklist state with the canonical server response. Coworker updates reconcile task state, N/A state, Staff Contribution attribution, timestamps, progress, and the recent-contribution list without a manual refresh. Polling pauses while the page is hidden and while a local mutation is in flight, so actively submitted controls are not replaced by a background refresh.
+
+Concurrency remains deliberately small and database-backed: each mutation rechecks Program authorization, roster status, configuration identity, and task-level N/A eligibility inside the existing atomic write. The target item is locked where supported; SQLite uses `IMMEDIATE` transactions with bounded lock retries. Each meaningful state transition and its append-only Staff Contribution are committed together. Clients never submit a whole checklist snapshot, so stale browser state cannot overwrite unrelated newer task changes.
+
 ## Verification
 
 ```powershell
@@ -75,14 +85,21 @@ Phase 2 adds Program-scoped Manager reporting without changing shared-checklist 
 
 The report UI is available at `/reports/` and uses one Date control for daily, Monday–Sunday weekly, containing-month, containing-calendar-year, and rolling-365-day periods. It includes Position, valid Shift, Staff, Completion, and Section filtering, plus CSV and print/browser-PDF output. Task wording is normalized at display time, preserving stored configuration and historical snapshots. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
 
-Generate deterministic development reporting history with the real roster, without creating authentication accounts:
+Generate deterministic synthetic operational history for reporting and testing with the normal operational roster:
 
 ```powershell
 python manage.py generate_mock_data --days 365
+```
+
+Generated history uses the normal `ChecklistInstance`, `ChecklistItem`, and `StaffContribution` models. Its contributions reference ordinary `StaffMember` roster records, and its instances are identified internally by `ChecklistInstance.is_mock_data=True`. The marker is not a staff-facing field. Mock generation creates no authentication account and does not depend on any special staff identity.
+
+Delete only generated mock operational history with:
+
+```powershell
 python manage.py generate_mock_data --clear
 ```
 
-Cleanup removes only ChecklistInstances explicitly marked as mock-generated.
+Cleanup removes only ChecklistInstances explicitly marked as mock-generated, plus their Items and Staff Contributions. Real operational history, configuration, roster records, users, and Program memberships remain untouched.
 
 Invoke the scheduler command from the eventual host scheduler at or after 08:00 local time. It determines which daily/weekly/monthly/annual periods are due and uses unique delivery records to avoid repeat sends:
 
@@ -92,11 +109,20 @@ python manage.py send_scheduled_reports
 
 Email uses Django settings backed by `DJANGO_EMAIL_BACKEND`, `DJANGO_EMAIL_HOST`, `DJANGO_EMAIL_PORT`, `DJANGO_EMAIL_HOST_USER`, `DJANGO_EMAIL_HOST_PASSWORD`, `DJANGO_EMAIL_USE_TLS`, and `DJANGO_DEFAULT_FROM_EMAIL`. No SMTP credential is stored in the repository.
 
-Purge only operational checklists strictly older than the seven-calendar-year boundary with:
+Purge only real, non-mock operational checklists strictly older than the seven-calendar-year boundary with:
 
 ```powershell
 python manage.py purge_operational_data --dry-run
 python manage.py purge_operational_data
 ```
 
-Configuration, inactive identities, and sent report snapshots are not removed by retention. Phase 2 intentionally does not include realtime synchronization, advanced analytics, staff scoring, server-side PDF rendering, infrastructure queues, or deployment automation.
+For the one-time transition from development/testing to live use on the same database, first inspect and then remove all real runtime operational history while preserving generated mock reporting history with:
+
+```powershell
+python manage.py purge_operational_data --fresh-start --dry-run
+python manage.py purge_operational_data --fresh-start
+```
+
+Fresh-start mode removes all non-mock Chore List instances, their item snapshots and Staff Contributions, plus scheduled report delivery history. Generated mock Chore Lists, items, and Staff Contributions remain available for reporting; `python manage.py generate_mock_data --clear` is the explicit way to remove them. Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster are also preserved. The purge contains no named or special-case staff cleanup logic.
+
+Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.

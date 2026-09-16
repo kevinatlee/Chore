@@ -1,0 +1,28 @@
+:root {
+  --primary: #174b42;
+  --secondary: #24685c;
+  --accent: #f6c85f;
+  --link-fg: #176653;
+  --link-selected-fg: #123f36;
+}
+
+#header { min-height: 3.4rem; }
+#site-name a { font-weight: 750; }
+.admin-context {
+  display: grid; gap: .1rem; max-width: 42rem; padding: .45rem .7rem;
+  color: #173d36; background: #e2f0ed; border-radius: .35rem; font-size: .78rem;
+}
+.admin-context span { color: #45615c; }
+.module h2, .module caption, .inline-group h2 { letter-spacing: .01em; }
+.form-row .help, .form-row p.help { max-width: 52rem; color: #59666d; line-height: 1.45; }
+fieldset.module > h2 + .description { margin: .75rem 1rem; color: #4d5f66; line-height: 1.5; }
+.aligned .form-row { padding-block: 1rem; }
+.submit-row { position: sticky; bottom: 0; z-index: 5; border-top: 1px solid #cbd6da; box-shadow: 0 -4px 14px rgb(20 45 50 / 8%); }
+input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, button:focus-visible {
+  outline: 3px solid #2e8172; outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  .admin-context { display: none; }
+  .submit-row { position: static; }
+}

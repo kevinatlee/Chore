@@ -1,7 +1,13 @@
 {% extends "base.html" %}
-{% load checklist_display %}
+{% load checklist_display static %}
 {% block title %}{{ instance.category_name_snapshot }} Chore List · {{ instance.shift_name_snapshot }} · Chore{% endblock %}
 {% block content %}
+<div
+  id="shared-checklist"
+  data-state-url="{% url 'checklist-state' instance.definition_id %}?date={{ instance.operational_date|date:'Y-m-d' }}"
+  data-revision="{{ checklist_revision }}"
+  data-current-staff="{{ staff_member.display_name }}"
+>
   <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}&staff={{ staff_member.pk }}&category={{ instance.category_id }}&shift={{ instance.shift_id }}">← Chore List selection</a>
   <div class="checklist-heading">
     <div>
@@ -14,9 +20,17 @@
       </p>
     </div>
     <div class="progress-summary">
-      <strong>{{ completed_count }} / {{ total_count }}</strong>
+      <strong><span id="resolved-count">{{ completed_count }}</span> / <span id="total-count">{{ total_count }}</span></strong>
       <span>resolved</span>
     </div>
+  </div>
+
+  <div class="shared-workflow-notice" role="status">
+    <div>
+      <strong>This Chore List is shared.</strong>
+      <span>Updates from coworkers appear automatically. Staff Contribution shows who last changed each task.</span>
+    </div>
+    <span class="sync-status" id="sync-status" aria-live="polite">Up to date</span>
   </div>
 
   {% for section in sections %}
@@ -24,7 +38,7 @@
       <h2>{{ section.name }}</h2>
       <div class="task-list">
         {% for item in section.items %}
-          <article class="task-card state-{{ item.current_state }}">
+          <article class="task-card state-{{ item.current_state }}" data-item-id="{{ item.id }}">
             <div class="task-copy">
               <div class="task-line">
                 {% if item.scheduled_start_snapshot %}
@@ -33,16 +47,23 @@
                 <h3>{{ item.task_label_snapshot|task_text }}</h3>
               </div>
               <div class="task-attribution">
-                <span class="status status-{{ item.current_state }}">{{ item.get_current_state_display }}</span>
+                <span class="status status-{{ item.current_state }}" data-item-status>{{ item.get_current_state_display }}</span>
                 {% if item.current_staff %}
-                  <span>Staff Contribution by {{ item.current_staff.display_name }}</span>
-                  <time datetime="{{ item.state_changed_at|date:'c' }}">{{ item.state_changed_at|date:"M j, H:i" }}</time>
+                  <span data-item-contributor>Staff Contribution by {{ item.current_staff.display_name }}</span>
+                  <time data-item-time datetime="{{ item.state_changed_at|date:'c' }}">{{ item.state_changed_at|date:"M j, H:i" }}</time>
                 {% else %}
-                  <span>No Staff Contribution yet</span>
+                  <span data-item-contributor>No Staff Contribution yet</span>
+                  <time data-item-time hidden></time>
                 {% endif %}
               </div>
             </div>
-            <form method="post" action="{% url 'update-item-state' item.id %}" class="task-actions">
+            <form
+              method="post"
+              action="{% url 'update-item-state' item.id %}"
+              class="task-actions"
+              data-item-form
+              data-allow-na="{{ item.allow_na_snapshot|yesno:'true,false' }}"
+            >
               {% csrf_token %}
               <input type="hidden" name="date" value="{{ instance.operational_date|date:'Y-m-d' }}">
               <input type="hidden" name="staff" value="{{ staff_member.pk }}">
@@ -70,7 +91,7 @@
   <section class="contribution-panel">
     <h2>Recent Staff Contributions</h2>
     <p>Task changes are retained even if an operational staff record is later deactivated.</p>
-    <ol class="contribution-list">
+    <ol class="contribution-list" id="recent-contributions">
       {% for contribution in contributions %}
         <li>
           <strong>{{ contribution.staff.display_name }}</strong>
@@ -83,4 +104,7 @@
       {% endfor %}
     </ol>
   </section>
+  <noscript><p class="sync-warning">Automatic coworker updates require JavaScript. Refresh this page to see new Staff Contributions.</p></noscript>
+</div>
+<script src="{% static 'checklists/checklist_sync.js' %}" defer></script>
 {% endblock %}

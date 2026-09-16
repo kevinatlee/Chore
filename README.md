@@ -59,6 +59,16 @@ Every meaningful item state change updates the current state and appends a `Staf
 
 The Django admin keeps Authentication Users separate from Operational Staff. Administrators can add, rename, deactivate, and reactivate roster records; delete is disabled so history is preserved. It also manages Program memberships, categories, shifts, definitions, tasks, and delivery records.
 
+Phase 3 adds plain-language field labels, section descriptions, active/inactive guidance, report-routing explanations, and focused confirmation prompts for deactivation and removal of future N/A eligibility. Deactivation prevents future operational use while preserving historical Chore Lists, snapshots, Staff Contributions, and sent-report records. Destructive bulk deletion is unavailable on the clarified configuration screens; Django's protected relationships and confirmation page continue to guard individual deletion. The legacy special-case roster identity and all associated flags, filtering, seed behavior, and migration handling have been removed; operational staff now follow one uniform model.
+
+## Shared Chore List synchronization
+
+Staff working the same Program + Position + Shift + operational date continue to use one shared `ChecklistInstance`. The staff page checks a Program-authorized JSON state endpoint every seven seconds while the page is visible and performs an immediate check when a background tab becomes visible. When the server revision has not changed, the endpoint returns only the unchanged revision, keeping polling payloads small.
+
+Task actions update the interface immediately, submit only the selected item state, and then replace the visible checklist state with the canonical server response. Coworker updates reconcile task state, N/A state, Staff Contribution attribution, timestamps, progress, and the recent-contribution list without a manual refresh. Polling pauses while the page is hidden and while a local mutation is in flight, so actively submitted controls are not replaced by a background refresh.
+
+Concurrency remains deliberately small and database-backed: each mutation rechecks Program authorization, roster status, configuration identity, and task-level N/A eligibility inside the existing atomic write. The target item is locked where supported; SQLite uses `IMMEDIATE` transactions with bounded lock retries. Each meaningful state transition and its append-only Staff Contribution are committed together. Clients never submit a whole checklist snapshot, so stale browser state cannot overwrite unrelated newer task changes.
+
 ## Verification
 
 ```powershell
@@ -99,4 +109,4 @@ python manage.py purge_operational_data --dry-run
 python manage.py purge_operational_data
 ```
 
-Configuration, inactive identities, and sent report snapshots are not removed by retention. Phase 2 intentionally does not include realtime synchronization, advanced analytics, staff scoring, server-side PDF rendering, infrastructure queues, or deployment automation.
+Configuration, inactive identities, and sent report snapshots are not removed by retention. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.

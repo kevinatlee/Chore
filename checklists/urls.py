@@ -12,5 +12,10 @@ urlpatterns = [
     path("reports/print/", views.report_print, name="report-print"),
     path("reports/checklists/<int:instance_id>/", views.report_detail, name="report-detail"),
     path("checklists/<int:definition_id>/", views.checklist_detail, name="checklist-detail"),
+    path(
+        "checklists/<int:definition_id>/state/",
+        views.checklist_state,
+        name="checklist-state",
+    ),
     path("items/<int:item_id>/state/", views.update_item_state, name="update-item-state"),
 ]

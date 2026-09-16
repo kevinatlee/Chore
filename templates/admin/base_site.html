@@ -1,0 +1,20 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | Chore administration{% endblock %}
+
+{% block branding %}
+  <div id="site-name"><a href="{% url 'admin:index' %}">Chore administration</a></div>
+{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'checklists/admin_clarity.css' %}">
+{% endblock %}
+
+{% block nav-global %}
+  <div class="admin-context">
+    <strong>Configuration affects future Chore Lists.</strong>
+    <span>Deactivate items to stop new use while preserving historical Chore Lists, Staff Contributions, and reports.</span>
+  </div>
+{% endblock %}

@@ -1,6 +1,6 @@
 # Chore
 
-Chore is a shared operational checklist application for Sonder House. Phase 1 provides secure staff sign-in, category and shift configuration, lazily created daily checklists, per-task Pending/Completed/N/A state, and append-only Staff Contribution history.
+Chore is a shared operational checklist application for Sonder House. It provides secure staff sign-in, category and shift configuration, lazily created daily checklists, per-task Pending/Completed/N/A state, append-only Staff Contribution history, and Program-scoped operational reporting.
 
 The important identity rule is enforced in the database: one operational checklist exists for each date, staff category, and shift. Staff do not submit individual copies. Everyone assigned to the same category works on the same checklist and sees the persisted state on reload.
 
@@ -71,4 +71,25 @@ python -m compileall chore checklists
 git diff --check main..HEAD
 ```
 
-Phase 1 intentionally does not include reporting, exports, manager email routing, retention jobs, realtime synchronization, advanced analytics, enterprise authentication, or deployment automation.
+## Reporting and operations
+
+Phase 2 adds Program-scoped Manager reporting without changing shared-checklist ownership. Configure `ProgramMembership` records in Django admin: a Manager can report only on their active Programs, and receives scheduled email only when **Receive scheduled reports** is enabled. Test Staff is marked on its Program membership; its contribution history remains inspectable by an admin but is replayed out of production calculations and scheduled reports.
+
+The report UI is available at `/reports/` and supports daily, Monday–Sunday weekly, calendar-month, calendar-year, and rolling-365-day periods. It includes category, valid-shift, contribution, checklist-state, task-state, and section filtering, plus CSV and print/browser-PDF output. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
+
+Invoke the scheduler command from the eventual host scheduler at or after 08:00 local time. It determines which daily/weekly/monthly/annual periods are due and uses unique delivery records to avoid repeat sends:
+
+```powershell
+python manage.py send_scheduled_reports
+```
+
+Email uses Django settings backed by `DJANGO_EMAIL_BACKEND`, `DJANGO_EMAIL_HOST`, `DJANGO_EMAIL_PORT`, `DJANGO_EMAIL_HOST_USER`, `DJANGO_EMAIL_HOST_PASSWORD`, `DJANGO_EMAIL_USE_TLS`, and `DJANGO_DEFAULT_FROM_EMAIL`. No SMTP credential is stored in the repository.
+
+Purge only operational checklists strictly older than the seven-calendar-year boundary with:
+
+```powershell
+python manage.py purge_operational_data --dry-run
+python manage.py purge_operational_data
+```
+
+Configuration, inactive identities, and sent report snapshots are not removed by retention. Phase 2 intentionally does not include realtime synchronization, advanced analytics, staff scoring, server-side PDF rendering, infrastructure queues, or deployment automation.

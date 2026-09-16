@@ -1,13 +1,15 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time, timedelta
 from io import StringIO
-from unittest.mock import patch
+from threading import Barrier
+from unittest.mock import call, patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
-from django.db import models
-from django.test import TestCase
+from django.db import IntegrityError, OperationalError, close_old_connections, models, transaction
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 
 from .models import (
@@ -24,8 +26,14 @@ from .models import (
     TaskDefinition,
     TaskState,
 )
-from .seed_data import STAFF_ROSTER
-from .services import change_item_state, resolve_checklist
+from .seed_data import DEFINITIONS, LIFE_SKILLS_SLOTS, STAFF_ROSTER
+from .services import (
+    SQLITE_LOCK_ATTEMPTS,
+    SQLITE_LOCK_BACKOFF_SECONDS,
+    _run_serialized_write,
+    change_item_state,
+    resolve_checklist,
+)
 
 
 class OperationalFixtureMixin:
@@ -148,19 +156,264 @@ class SharedChecklistDomainTests(OperationalFixtureMixin, TestCase):
             )
 
     def test_historical_snapshots_do_not_follow_configuration_edits(self):
+        self.regular.scheduled_start = time(8)
+        self.regular.scheduled_end = time(9)
+        self.regular.save(update_fields=("scheduled_start", "scheduled_end"))
         instance = resolve_checklist(self.definition, self.operational_date)
         item = instance.items.get(source_task=self.regular)
         self.category.name = "Renamed"
         self.category.save(update_fields=("name",))
         self.shift.name = "Changed"
-        self.shift.save(update_fields=("name",))
+        self.shift.start_time = time(6)
+        self.shift.end_time = time(14)
+        self.shift.save(update_fields=("name", "start_time", "end_time"))
+        self.section.name = "Changed section"
+        self.section.sort_order = 90
+        self.section.save(update_fields=("name", "sort_order"))
         self.regular.label = "Changed task"
-        self.regular.save(update_fields=("label",))
+        self.regular.sort_order = 90
+        self.regular.scheduled_start = time(10)
+        self.regular.scheduled_end = time(11)
+        self.regular.save(
+            update_fields=("label", "sort_order", "scheduled_start", "scheduled_end")
+        )
         instance.refresh_from_db()
         item.refresh_from_db()
         self.assertEqual(instance.category_name_snapshot, "Support")
         self.assertEqual(instance.shift_name_snapshot, "Morning")
+        self.assertEqual(instance.shift_start_snapshot, time(7))
+        self.assertEqual(instance.shift_end_snapshot, time(15))
+        self.assertEqual(item.section_name_snapshot, "Office")
+        self.assertEqual(item.section_order_snapshot, 10)
         self.assertEqual(item.task_label_snapshot, "Regular task")
+        self.assertEqual(item.task_order_snapshot, 10)
+        self.assertEqual(item.scheduled_start_snapshot, time(8))
+        self.assertEqual(item.scheduled_end_snapshot, time(9))
+
+    def test_definition_identity_uniqueness_and_ordered_history_invariants(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        other_category = StaffCategory.objects.create(
+            program=self.program, name="Other", slug="other", sort_order=20
+        )
+        third_category = StaffCategory.objects.create(
+            program=self.program, name="Third", slug="third", sort_order=30
+        )
+        evening = Shift.objects.create(
+            name="Evening", start_time=time(15), end_time=time(23), sort_order=20
+        )
+        night = Shift.objects.create(
+            name="Night", start_time=time(23), end_time=time(7), sort_order=30
+        )
+
+        self.definition.category = other_category
+        with self.assertRaises(ValidationError):
+            self.definition.save()
+        self.definition.refresh_from_db()
+        self.definition.shift = evening
+        with self.assertRaises(ValidationError):
+            self.definition.save()
+        self.definition.refresh_from_db()
+
+        unused = ChecklistDefinition.objects.create(
+            name="Unused", category=other_category, shift=evening
+        )
+        unused.category = third_category
+        unused.save(update_fields=("category",))
+        unused.shift = night
+        unused.save(update_fields=("shift",))
+        self.assertEqual((unused.category, unused.shift), (third_category, night))
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ChecklistInstance.objects.create(
+                program=self.program,
+                operational_date=self.operational_date,
+                definition=self.definition,
+                category=self.category,
+                shift=self.shift,
+                category_name_snapshot="Support",
+                shift_name_snapshot="Morning",
+                shift_start_snapshot=time(7),
+                shift_end_snapshot=time(15),
+            )
+        self.assertEqual(ChecklistInstance.objects.get().pk, instance.pk)
+
+        item = instance.items.get(source_task=self.optional)
+        change_item_state(
+            item_id=item.pk,
+            actor=self.operator,
+            staff_member=self.staff_a,
+            new_state=TaskState.COMPLETED,
+        )
+        change_item_state(
+            item_id=item.pk,
+            actor=self.operator,
+            staff_member=self.staff_b,
+            new_state=TaskState.PENDING,
+        )
+        history = list(item.contributions.all())
+        self.assertEqual([entry.staff for entry in history], [self.staff_a, self.staff_b])
+        self.assertEqual(history[1].previous_state, TaskState.COMPLETED)
+        self.assertEqual(history[1].new_state, TaskState.PENDING)
+
+    def test_na_ui_backend_and_write_access_guards(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        regular = instance.items.get(source_task=self.regular)
+        self.client.force_login(self.operator)
+        detail = self.client.get(
+            reverse("checklist-detail", args=(self.definition.pk,)),
+            {"date": self.operational_date, "staff": self.staff_a.pk},
+        )
+        self.assertContains(detail, 'name="state" value="na"', count=1)
+        response = self.client.post(
+            reverse("update-item-state", args=(regular.pk,)),
+            {"state": TaskState.NOT_APPLICABLE, "staff": self.staff_a.pk},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(regular.contributions.exists())
+
+        self.client.logout()
+        response = self.client.post(
+            reverse("update-item-state", args=(regular.pk,)),
+            {"state": TaskState.COMPLETED, "staff": self.staff_a.pk},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response.url)
+
+        self.operator.is_active = False
+        self.operator.save(update_fields=("is_active",))
+        with self.assertRaises(PermissionDenied):
+            change_item_state(
+                item_id=regular.pk,
+                actor=self.operator,
+                staff_member=self.staff_a,
+                new_state=TaskState.COMPLETED,
+            )
+        self.operator.is_active = True
+        self.operator.save(update_fields=("is_active",))
+        self.definition.is_active = False
+        self.definition.save(update_fields=("is_active",))
+        self.client.force_login(self.operator)
+        response = self.client.post(
+            reverse("update-item-state", args=(regular.pk,)),
+            {"state": TaskState.COMPLETED, "staff": self.staff_a.pk},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(regular.contributions.exists())
+
+
+class SQLiteRetryPolicyTests(SimpleTestCase):
+    def test_retry_policy_handles_only_bounded_sqlite_lock_errors(self):
+        attempts = 0
+
+        def succeeds_after_locks():
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise OperationalError("database is locked")
+            return "completed"
+
+        with (
+            patch("checklists.services.connection") as mocked_connection,
+            patch("checklists.services.time.sleep") as mocked_sleep,
+        ):
+            mocked_connection.vendor = "sqlite"
+            self.assertEqual(_run_serialized_write(succeeds_after_locks), "completed")
+        self.assertEqual(attempts, 3)
+        self.assertEqual(
+            mocked_sleep.call_args_list,
+            [call(SQLITE_LOCK_BACKOFF_SECONDS), call(SQLITE_LOCK_BACKOFF_SECONDS * 2)],
+        )
+
+        attempts = 0
+
+        def unrelated_error():
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("disk I/O error")
+
+        with (
+            patch("checklists.services.connection") as mocked_connection,
+            patch("checklists.services.time.sleep") as mocked_sleep,
+        ):
+            mocked_connection.vendor = "sqlite"
+            with self.assertRaisesMessage(OperationalError, "disk I/O error"):
+                _run_serialized_write(unrelated_error)
+        self.assertEqual(attempts, 1)
+        mocked_sleep.assert_not_called()
+
+        attempts = 0
+
+        def permanently_locked():
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("database is locked")
+
+        with (
+            patch("checklists.services.connection") as mocked_connection,
+            patch("checklists.services.time.sleep") as mocked_sleep,
+        ):
+            mocked_connection.vendor = "sqlite"
+            with self.assertRaisesMessage(OperationalError, "database is locked"):
+                _run_serialized_write(permanently_locked)
+        self.assertEqual(attempts, SQLITE_LOCK_ATTEMPTS)
+        self.assertEqual(mocked_sleep.call_count, SQLITE_LOCK_ATTEMPTS - 1)
+
+
+class ConcurrentChecklistTests(OperationalFixtureMixin, TransactionTestCase):
+    def _run_together(self, operations):
+        barrier = Barrier(len(operations))
+
+        def run(operation):
+            close_old_connections()
+            try:
+                barrier.wait()
+                return operation()
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=len(operations)) as executor:
+            futures = [executor.submit(run, operation) for operation in operations]
+            return [future.result(timeout=10) for future in futures]
+
+    def test_concurrent_creation_and_state_changes_remain_serialized(self):
+        def resolve():
+            definition = ChecklistDefinition.objects.select_related(
+                "category__program", "shift"
+            ).get(pk=self.definition.pk)
+            return resolve_checklist(definition, self.operational_date).pk
+
+        instance_ids = self._run_together((resolve, resolve))
+        self.assertEqual(instance_ids[0], instance_ids[1])
+        self.assertEqual(ChecklistInstance.objects.count(), 1)
+        instance = ChecklistInstance.objects.get()
+        item = instance.items.get(source_task=self.optional)
+
+        def change(staff_id, state):
+            def operation():
+                actor = get_user_model().objects.get(pk=self.operator.pk)
+                staff = StaffMember.objects.get(pk=staff_id)
+                changed_item, contribution = change_item_state(
+                    item_id=item.pk,
+                    actor=actor,
+                    staff_member=staff,
+                    new_state=state,
+                )
+                return changed_item.current_state, contribution.pk
+
+            return operation
+
+        self._run_together(
+            (
+                change(self.staff_a.pk, TaskState.COMPLETED),
+                change(self.staff_b.pk, TaskState.NOT_APPLICABLE),
+            )
+        )
+        history = list(item.contributions.order_by("created_at", "id"))
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0].previous_state, TaskState.PENDING)
+        self.assertEqual(history[1].previous_state, history[0].new_state)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, history[1].new_state)
 
 
 class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
@@ -274,6 +527,9 @@ class SeedCorrectionTests(TestCase):
         self.assertTrue(usernames.isdisjoint(set(STAFF_ROSTER)))
         self.assertFalse(hasattr(StaffMember, "username"))
         self.assertFalse(hasattr(StaffMember, "password"))
+        operator = get_user_model().objects.get(username="sonderhouse")
+        self.assertTrue(operator.check_password("operational-password"))
+        self.assertEqual(operator.program_memberships.get().role, ProgramRole.OPERATIONAL)
 
     def test_exact_three_shift_identities_and_metadata(self):
         self.assertEqual(
@@ -286,8 +542,14 @@ class SeedCorrectionTests(TestCase):
         )
         self.assertEqual([str(shift) for shift in Shift.objects.all()], ["Morning", "Evening", "Night"])
         self.assertFalse(Shift.objects.filter(start_time=time(8), end_time=time(15)).exists())
+        self.assertTrue(Shift.objects.get(name="Night").crosses_midnight)
+        self.client.force_login(get_user_model().objects.get(username="sonderhouse"))
+        self.assertContains(
+            self.client.get(reverse("dashboard")),
+            "For Night, use the date on which the shift starts.",
+        )
 
-    def test_life_skills_uses_morning_and_valid_combinations_are_exact(self):
+    def test_seed_matches_source_configuration_and_life_skills_use_morning(self):
         combinations = set(
             ChecklistDefinition.objects.values_list("category__name", "shift__name")
         )
@@ -303,6 +565,42 @@ class SeedCorrectionTests(TestCase):
                 ("Life Skills", "Morning"),
             },
         )
+        for category_key, shift_key, _, _, expected_sections in DEFINITIONS:
+            definition = ChecklistDefinition.objects.get(
+                seed_key=f"definition-{category_key}-{shift_key}"
+            )
+            sections = definition.sections.filter(is_active=True).order_by("sort_order")
+            self.assertEqual(
+                [section.name for section in sections],
+                [name for name, _ in expected_sections],
+            )
+            for section, (_, expected_labels) in zip(sections, expected_sections):
+                self.assertEqual(
+                    list(
+                        section.tasks.filter(is_active=True)
+                        .order_by("sort_order")
+                        .values_list("label", flat=True)
+                    ),
+                    expected_labels,
+                )
+
+        life_definition = ChecklistDefinition.objects.get(
+            seed_key="definition-life-skills-morning"
+        )
+        life_tasks = TaskDefinition.objects.filter(
+            section__definition=life_definition, is_active=True
+        )
+        self.assertEqual(life_tasks.count(), 40)
+        self.assertFalse(life_tasks.filter(scheduled_end__gt=time(15)).exists())
+        for order, (slot_key, start, end, labels) in enumerate(LIFE_SKILLS_SLOTS, start=1):
+            for weekday, label in enumerate(labels):
+                task = life_tasks.get(seed_key=f"task-life-skills-{slot_key}-{weekday}")
+                self.assertEqual(
+                    (task.label, task.sort_order, task.weekday),
+                    (label, order * 10, weekday),
+                )
+                self.assertEqual(task.scheduled_start, time.fromisoformat(start))
+                self.assertEqual(task.scheduled_end, time.fromisoformat(end))
 
     def test_selector_only_renders_shifts_valid_for_selected_category(self):
         operator = get_user_model().objects.get(username="sonderhouse")
@@ -322,10 +620,40 @@ class SeedCorrectionTests(TestCase):
             "shifts": list(Shift.objects.values_list("pk", flat=True)),
             "definitions": list(ChecklistDefinition.objects.values_list("pk", flat=True)),
         }
+        operator = get_user_model().objects.get(username="sonderhouse")
+        staff = StaffMember.objects.first()
+        definition = ChecklistDefinition.objects.get(seed_key="definition-support-morning")
+        instance = resolve_checklist(definition, date(2026, 9, 15))
+        item = instance.items.first()
+        snapshot = item.task_label_snapshot
+        change_item_state(
+            item_id=item.pk,
+            actor=operator,
+            staff_member=staff,
+            new_state=TaskState.COMPLETED,
+        )
+        life_section = ChecklistSection.objects.get(seed_key="section-life-skills-morning-01")
+        removed_task = TaskDefinition.objects.create(
+            section=life_section,
+            weekday=0,
+            sort_order=500,
+            label="Break",
+            scheduled_start=time(10),
+            scheduled_end=time(10, 15),
+        )
         call_command("seed_development", reset_passwords=True, verbosity=0)
         self.assertEqual(ids["staff"], list(StaffMember.objects.values_list("pk", flat=True)))
         self.assertEqual(ids["shifts"], list(Shift.objects.values_list("pk", flat=True)))
         self.assertEqual(ids["definitions"], list(ChecklistDefinition.objects.values_list("pk", flat=True)))
+        item.refresh_from_db()
+        contribution = item.contributions.get()
+        self.assertEqual(item.task_label_snapshot, snapshot)
+        self.assertEqual(item.current_state, TaskState.COMPLETED)
+        self.assertEqual(contribution.staff, staff)
+        self.assertEqual(contribution.recorded_by, operator)
+        removed_task.refresh_from_db()
+        self.assertFalse(removed_task.is_active)
+        self.assertEqual(removed_task.seed_key, "task-life-skills-retired-break-1000-0")
 
 
 class MockDataTests(TestCase):

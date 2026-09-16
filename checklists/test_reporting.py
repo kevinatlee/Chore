@@ -3,6 +3,7 @@ from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -130,6 +131,21 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
         self.assertEqual(row["na_count"], 1)
         self.assertEqual(row["completion_percentage"], 100.0)
         self.assertCountEqual(row["contributors"], ["Alfred Sampare", "Chelsea Brown"])
+        optional_task = next(task for task in row["tasks"] if task["label"] == "Alpha optional")
+        self.assertEqual(optional_task["state"], TaskState.NOT_APPLICABLE)
+        self.assertEqual(optional_task["contributor"], "Chelsea Brown")
+        self.assertEqual(
+            optional_task["contributions"],
+            [
+                {
+                    "staff": "Chelsea Brown",
+                    "staff_id": self.staff_a2.pk,
+                    "previous_state": TaskState.PENDING,
+                    "new_state": TaskState.NOT_APPLICABLE,
+                    "created_at": optional_task["contributions"][0]["created_at"],
+                }
+            ],
+        )
 
     def test_unfinished_checklist_lists_every_contributor(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
@@ -163,6 +179,43 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
         self.assertEqual(list(report["staff_choices"]), [self.staff_a])
         self.assertEqual(len(report["rows"]), 1)
         self.assertEqual(len(report["rows"][0]["filtered_tasks"]), 1)
+
+    def test_category_shift_status_task_state_and_section_filters_are_scoped(self):
+        instance = resolve_checklist(self.definition_a, self.operational_date)
+        self.contribute(
+            instance.items.get(source_task=self.regular_a),
+            self.staff_a,
+            TaskState.COMPLETED,
+        )
+        foreign_shift = Shift.objects.create(
+            name="Evening", start_time=time(15), end_time=time(23), sort_order=20
+        )
+        self._definition_for_shift(self.category_b, foreign_shift, "Beta evening")
+
+        self.assertEqual(len(self.report_a(category=str(self.category_a.pk))["rows"]), 1)
+        self.assertEqual(self.report_a(category=str(self.category_b.pk))["rows"], [])
+        self.assertEqual(len(self.report_a(shift=str(self.shift.pk))["rows"]), 1)
+        self.assertEqual(self.report_a(shift=str(foreign_shift.pk))["rows"], [])
+        self.assertEqual(len(self.report_a(status="incomplete")["rows"]), 1)
+        self.assertEqual(self.report_a(status="completed")["rows"], [])
+
+        completed = self.report_a(task_state=TaskState.COMPLETED)["rows"][0]
+        pending = self.report_a(task_state=TaskState.PENDING)["rows"][0]
+        section = self.report_a(section="Alpha section")["rows"][0]
+        self.assertEqual([task["label"] for task in completed["filtered_tasks"]], ["Alpha regular"])
+        self.assertEqual([task["label"] for task in pending["filtered_tasks"]], ["Alpha optional"])
+        self.assertEqual(len(section["filtered_tasks"]), 2)
+        self.assertEqual(self.report_a(section="Beta section")["rows"], [])
+
+    def _definition_for_shift(self, category, shift, prefix):
+        definition = ChecklistDefinition.objects.create(
+            name=f"{prefix} checklist", category=category, shift=shift
+        )
+        section = ChecklistSection.objects.create(
+            definition=definition, name=f"{prefix} section", sort_order=10
+        )
+        TaskDefinition.objects.create(section=section, label=f"{prefix} regular", sort_order=10)
+        return definition
 
     def test_large_report_does_not_exceed_sqlite_parameter_limit(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
@@ -203,11 +256,11 @@ class PeriodBoundaryTests(TestCase):
         monthly = period_from_params({"period": "monthly", "month": "2024-02"})
         annual = period_from_params({"period": "annual", "year": "2024"})
         rolling = period_from_params({"period": "rolling365", "date": "2024-03-01"})
-        self.assertEqual(daily.start, date(2026, 9, 15))
+        self.assertEqual((daily.start, daily.end), (date(2026, 9, 15), date(2026, 9, 15)))
         self.assertEqual((weekly.start, weekly.end), (date(2026, 9, 14), date(2026, 9, 20)))
-        self.assertEqual(monthly.end, date(2024, 2, 29))
+        self.assertEqual((monthly.start, monthly.end), (date(2024, 2, 1), date(2024, 2, 29)))
         self.assertEqual((annual.start, annual.end), (date(2024, 1, 1), date(2024, 12, 31)))
-        self.assertEqual((rolling.end - rolling.start).days, 364)
+        self.assertEqual((rolling.start, rolling.end), (date(2023, 3, 3), date(2024, 3, 1)))
 
     def test_scheduled_periods_use_previous_complete_periods(self):
         monday = dict(scheduled_periods(date(2026, 9, 21)))
@@ -241,6 +294,59 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
             ).status_code,
             403,
         )
+
+        category_tamper = self.client.get(
+            reverse("reports"),
+            {"date": self.operational_date, "category": self.category_b.pk},
+        )
+        self.assertEqual(category_tamper.status_code, 200)
+        self.assertEqual(category_tamper.context["rows"], [])
+        self.assertNotContains(category_tamper, "Beta regular")
+
+        foreign_shift = Shift.objects.create(
+            name="Evening", start_time=time(15), end_time=time(23), sort_order=20
+        )
+        foreign_definition = ChecklistDefinition.objects.create(
+            name="Beta evening", category=self.category_b, shift=foreign_shift
+        )
+        foreign_section = ChecklistSection.objects.create(
+            definition=foreign_definition, name="Foreign section", sort_order=10
+        )
+        TaskDefinition.objects.create(
+            section=foreign_section, label="Foreign task", sort_order=10
+        )
+        shift_tamper = self.client.get(
+            reverse("reports"),
+            {"date": self.operational_date, "shift": foreign_shift.pk},
+        )
+        self.assertEqual(shift_tamper.status_code, 200)
+        self.assertEqual(shift_tamper.context["rows"], [])
+        self.assertNotContains(shift_tamper, "Foreign task")
+
+    def test_operational_account_is_denied_and_admin_needs_no_membership(self):
+        beta = ChecklistInstance.objects.get(program=self.program_b)
+        self.client.force_login(self.operator)
+        for url in (
+            reverse("reports"),
+            reverse("report-csv"),
+            reverse("report-print"),
+            reverse("report-detail", args=(beta.pk,)),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 403)
+
+        admin = get_user_model().objects.create_superuser(
+            "site-admin", "site-admin@example.com", "password"
+        )
+        self.assertFalse(ProgramMembership.objects.filter(user=admin).exists())
+        self.client.force_login(admin)
+        response = self.client.get(
+            reverse("reports"),
+            {"program": self.program_a.pk, "date": self.operational_date},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["rows"]), 1)
+        self.assertEqual(response.context["program"], self.program_a)
 
     def test_csv_and_print_are_scoped_and_use_staff_names(self):
         self.client.force_login(self.manager_a)
@@ -277,12 +383,33 @@ class ScheduledReportTests(ReportingFixtureMixin, TestCase):
             role=ProgramRole.MANAGER,
             receive_scheduled_reports=True,
         )
+        get_user_model().objects.create_superuser(
+            "site-admin", "site-admin@example.com", "password"
+        )
+        resolve_checklist(self.definition_a, self.operational_date)
+        resolve_checklist(self.definition_b, self.operational_date)
         call_command("send_scheduled_reports", at="2026-09-16T08:00:00", verbosity=0)
         recipients = [address for message in mail.outbox for address in message.to]
         self.assertCountEqual(
             recipients,
             ["manager-a@example.com", "manager-a-2@example.com", "manager-b@example.com"],
         )
+        self.assertNotIn("site-admin@example.com", recipients)
+        messages = {message.to[0]: message.body for message in mail.outbox}
+        self.assertIn("Program Alpha", messages["manager-a@example.com"])
+        self.assertNotIn("Program Beta", messages["manager-a@example.com"])
+        self.assertIn("Program Beta", messages["manager-b@example.com"])
+        self.assertNotIn("Program Alpha", messages["manager-b@example.com"])
+        alpha_snapshot = ScheduledReportDelivery.objects.get(
+            program=self.program_a, recipient=self.manager_a
+        ).snapshot
+        beta_snapshot = ScheduledReportDelivery.objects.get(
+            program=self.program_b, recipient=self.manager_b
+        ).snapshot
+        self.assertIn("Alpha regular", str(alpha_snapshot))
+        self.assertNotIn("Beta regular", str(alpha_snapshot))
+        self.assertIn("Beta regular", str(beta_snapshot))
+        self.assertNotIn("Alpha regular", str(beta_snapshot))
         call_command("send_scheduled_reports", at="2026-09-16T09:00:00", verbosity=0)
         self.assertEqual(len(mail.outbox), 3)
 
@@ -311,10 +438,38 @@ class RetentionTests(ReportingFixtureMixin, TestCase):
             self.staff_a,
             TaskState.COMPLETED,
         )
+        for configured_object in (
+            self.category_a,
+            self.shift,
+            self.definition_a,
+            self.regular_a.section,
+            self.regular_a,
+        ):
+            configured_object.is_active = False
+            configured_object.save(update_fields=("is_active",))
         call_command("purge_operational_data", as_of="2026-09-16", verbosity=0)
         self.assertTrue(ChecklistInstance.objects.filter(pk=boundary.pk).exists())
         self.assertFalse(ChecklistInstance.objects.filter(pk=older.pk).exists())
         self.assertTrue(StaffMember.objects.filter(pk=self.staff_a.pk).exists())
+        self.assertTrue(Program.objects.filter(pk=self.program_a.pk).exists())
+        for configured_object in (
+            self.category_a,
+            self.shift,
+            self.definition_a,
+            self.regular_a.section,
+            self.regular_a,
+        ):
+            configured_object.refresh_from_db()
+            self.assertFalse(configured_object.is_active)
+
+    def test_inactive_configuration_history_reports_but_cannot_be_reopened(self):
+        instance = resolve_checklist(self.definition_a, self.operational_date)
+        self.definition_a.is_active = False
+        self.definition_a.save(update_fields=("is_active",))
+
+        self.assertEqual(self.report_a()["rows"][0]["id"], instance.pk)
+        with self.assertRaises(PermissionDenied):
+            resolve_checklist(self.definition_a, date(2026, 9, 16))
 
     def test_dry_run_preserves_data(self):
         old = resolve_checklist(self.definition_a, date(2018, 1, 1))

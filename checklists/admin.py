@@ -9,9 +9,9 @@ from .models import (
     ProgramMembership,
     ScheduledReportDelivery,
     Shift,
-    StaffAssignment,
     StaffCategory,
     StaffContribution,
+    StaffMember,
     TaskDefinition,
 )
 
@@ -34,11 +34,10 @@ class ProgramMembershipAdmin(admin.ModelAdmin):
         "user",
         "program",
         "role",
-        "is_test_staff",
         "receive_scheduled_reports",
         "is_active",
     )
-    list_filter = ("program", "role", "is_test_staff", "receive_scheduled_reports", "is_active")
+    list_filter = ("program", "role", "receive_scheduled_reports", "is_active")
     search_fields = ("user__username", "user__first_name", "user__last_name")
 
 
@@ -103,12 +102,21 @@ class TaskDefinitionAdmin(admin.ModelAdmin):
         return obj.label[:80]
 
 
-@admin.register(StaffAssignment)
-class StaffAssignmentAdmin(admin.ModelAdmin):
-    list_display = ("user", "category", "is_active")
+@admin.register(StaffMember)
+class StaffMemberAdmin(admin.ModelAdmin):
+    list_display = ("first_name", "last_name", "program", "is_active", "contribution_count")
     list_editable = ("is_active",)
-    list_filter = ("category__program", "category", "is_active")
-    search_fields = ("user__username", "user__first_name", "user__last_name")
+    list_filter = ("program", "is_active")
+    search_fields = ("first_name", "last_name")
+    ordering = ("first_name", "last_name")
+    fields = ("program", "first_name", "last_name", "is_active")
+
+    @admin.display(description="Contributions")
+    def contribution_count(self, obj):
+        return obj.staff_contributions.count()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class ChecklistItemInline(admin.TabularInline):
@@ -119,7 +127,7 @@ class ChecklistItemInline(admin.TabularInline):
         "section_name_snapshot",
         "task_label_snapshot",
         "current_state",
-        "current_contributor",
+        "current_staff",
         "state_changed_at",
     )
     readonly_fields = fields
@@ -162,7 +170,7 @@ class ChecklistItemAdmin(admin.ModelAdmin):
         "task_label_snapshot",
         "instance",
         "current_state",
-        "current_contributor",
+        "current_staff",
         "state_changed_at",
     )
     list_filter = ("current_state", "instance__category", "instance__shift")
@@ -179,7 +187,7 @@ class ChecklistItemAdmin(admin.ModelAdmin):
         "scheduled_start_snapshot",
         "scheduled_end_snapshot",
         "current_state",
-        "current_contributor",
+        "current_staff",
         "state_changed_at",
         "created_at",
         "updated_at",
@@ -194,10 +202,10 @@ class ChecklistItemAdmin(admin.ModelAdmin):
 
 @admin.register(StaffContribution)
 class StaffContributionAdmin(admin.ModelAdmin):
-    list_display = ("staff", "item", "previous_state", "new_state", "created_at")
+    list_display = ("staff", "item", "previous_state", "new_state", "recorded_by", "created_at")
     list_filter = ("new_state", "item__instance__category", "item__instance__shift")
-    search_fields = ("staff__username", "staff__first_name", "staff__last_name")
-    readonly_fields = ("item", "staff", "previous_state", "new_state", "created_at")
+    search_fields = ("staff__first_name", "staff__last_name", "recorded_by__username")
+    readonly_fields = ("item", "staff", "recorded_by", "previous_state", "new_state", "created_at")
 
     def has_add_permission(self, request):
         return False

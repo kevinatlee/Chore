@@ -2,9 +2,7 @@
 {% block title %}Sign in · Chore{% endblock %}
 {% block content %}
   <section class="auth-card">
-    <p class="eyebrow">Sonder House</p>
     <h1>Sign in to Chore</h1>
-    <p>Use your staff account to continue a shared operational checklist.</p>
     {% if form.errors %}<p class="message error">The username or password was not recognized.</p>{% endif %}
     <form method="post" class="stacked-form">
       {% csrf_token %}

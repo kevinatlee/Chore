@@ -26,7 +26,7 @@ class Program(models.Model):
 
 
 class ProgramRole(models.TextChoices):
-    STAFF = "staff", "Staff"
+    OPERATIONAL = "operational", "Operational access"
     MANAGER = "manager", "Manager"
 
 
@@ -39,7 +39,6 @@ class ProgramMembership(models.Model):
     )
     role = models.CharField(max_length=16, choices=ProgramRole.choices)
     is_active = models.BooleanField(default=True)
-    is_test_staff = models.BooleanField(default=False)
     receive_scheduled_reports = models.BooleanField(default=False)
 
     class Meta:
@@ -59,6 +58,36 @@ class ProgramMembership(models.Model):
 
     def __str__(self):
         return f"{self.user} — {self.program} ({self.get_role_display()})"
+
+
+class StaffMember(models.Model):
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="staff_members"
+    )
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    is_active = models.BooleanField(default=True)
+    seed_key = models.SlugField(
+        max_length=220, unique=True, null=True, blank=True, editable=False
+    )
+
+    class Meta:
+        ordering = ("first_name", "last_name", "id")
+        verbose_name = "operational staff member"
+        verbose_name_plural = "operational staff"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("program", "first_name", "last_name"),
+                name="unique_program_staff_name",
+            )
+        ]
+
+    @property
+    def display_name(self):
+        return f"{self.first_name} {self.last_name}".strip()
+
+    def __str__(self):
+        return self.display_name
 
 
 class ActiveOrderedModel(models.Model):
@@ -248,27 +277,6 @@ class TaskDefinition(models.Model):
         return f"{self.section} — {prefix}{self.label}"
 
 
-class StaffAssignment(models.Model):
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="staff_assignments"
-    )
-    category = models.ForeignKey(
-        StaffCategory, on_delete=models.PROTECT, related_name="staff_assignments"
-    )
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ("user__username", "category__sort_order", "category__name")
-        constraints = [
-            models.UniqueConstraint(
-                fields=("user", "category"), name="unique_staff_category_assignment"
-            )
-        ]
-
-    def __str__(self):
-        return f"{self.user} — {self.category}"
-
-
 class TaskState(models.TextChoices):
     PENDING = "pending", "Pending"
     COMPLETED = "completed", "Completed"
@@ -297,6 +305,7 @@ class ChecklistInstance(models.Model):
     shift_start_snapshot = models.TimeField()
     shift_end_snapshot = models.TimeField()
     created_at = models.DateTimeField(auto_now_add=True)
+    is_mock_data = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("-operational_date", "category_name_snapshot", "shift_start_snapshot")
@@ -356,8 +365,8 @@ class ChecklistItem(models.Model):
     current_state = models.CharField(
         max_length=16, choices=TaskState.choices, default=TaskState.PENDING
     )
-    current_contributor = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+    current_staff = models.ForeignKey(
+        StaffMember,
         on_delete=models.PROTECT,
         related_name="current_checklist_items",
         null=True,
@@ -397,9 +406,16 @@ class StaffContribution(models.Model):
         ChecklistItem, on_delete=models.PROTECT, related_name="contributions"
     )
     staff = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        StaffMember,
         on_delete=models.PROTECT,
         related_name="staff_contributions",
+    )
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_staff_contributions",
+        null=True,
+        blank=True,
     )
     previous_state = models.CharField(max_length=16, choices=TaskState.choices)
     new_state = models.CharField(max_length=16, choices=TaskState.choices)

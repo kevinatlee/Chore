@@ -54,7 +54,7 @@
     <label>Staff contribution
       <select name="staff">
         <option value="">All contributors</option>
-        {% for choice in staff_choices %}<option value="{{ choice.pk }}" {% if filters.staff == choice.pk|stringformat:'s' %}selected{% endif %}>{% firstof choice.get_full_name choice.username %}</option>{% endfor %}
+        {% for choice in staff_choices %}<option value="{{ choice.pk }}" {% if filters.staff == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.display_name }}</option>{% endfor %}
       </select>
     </label>
     <label>Checklist state
@@ -78,9 +78,6 @@
         {% for choice in section_choices %}<option value="{{ choice }}" {% if filters.section == choice %}selected{% endif %}>{{ choice }}</option>{% endfor %}
       </select>
     </label>
-    {% if user.is_superuser %}
-      <label class="checkbox-label"><input type="checkbox" name="include_test" value="1" {% if include_test %}checked{% endif %}> Include Test Staff (admin inspection)</label>
-    {% endif %}
     <div class="filter-actions"><button class="button primary" type="submit">Apply filters</button><a class="button secondary" href="{% url 'reports' %}">Reset</a></div>
   </form>
 

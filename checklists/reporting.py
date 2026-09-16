@@ -1,19 +1,20 @@
 from calendar import monthrange
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from django.contrib.auth import get_user_model
-from django.db.models import Prefetch, Q
+from django.db.models import Subquery
 
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
+    ChecklistItem,
     Program,
-    ProgramMembership,
     ProgramRole,
     Shift,
     StaffCategory,
     StaffContribution,
+    StaffMember,
     TaskState,
 )
 
@@ -97,27 +98,14 @@ def selected_program(user, raw_program=None):
     return programs.first()
 
 
-def build_report(*, program, period, filters=None, include_test=False):
+def build_report(*, program, period, filters=None):
     filters = filters or {}
-    test_staff_ids = set()
-    if not include_test:
-        test_staff_ids = set(
-            ProgramMembership.objects.filter(
-                program=program, is_test_staff=True
-            ).values_list("user_id", flat=True)
-        )
-
-    contributions = StaffContribution.objects.select_related("staff").order_by("created_at", "id")
     instances = (
         ChecklistInstance.objects.filter(
             program=program,
             operational_date__range=(period.start, period.end),
         )
         .select_related("category", "shift")
-        .prefetch_related(
-            Prefetch("items__contributions", queryset=contributions),
-            "items__current_contributor",
-        )
         .order_by("operational_date", "category_name_snapshot", "shift_start_snapshot")
     )
 
@@ -146,15 +134,29 @@ def build_report(*, program, period, filters=None, include_test=False):
     rows = []
     totals = {"checklists": 0, "applicable": 0, "completed": 0, "na": 0, "pending": 0}
 
+    # Nested prefetch expands every checklist-item id into one IN parameter
+    # list. A full-year report exceeds SQLite's variable limit, so use fixed-
+    # size subqueries and assemble the already-ordered records in memory.
+    instance_ids = instances.values("pk").order_by()
+    report_items = ChecklistItem.objects.filter(
+        instance_id__in=Subquery(instance_ids)
+    ).order_by("instance_id", "section_order_snapshot", "task_order_snapshot", "id")
+    item_ids = report_items.values("pk").order_by()
+    report_contributions = StaffContribution.objects.filter(
+        item_id__in=Subquery(item_ids)
+    ).select_related("staff").order_by("item_id", "created_at", "id")
+    contributions_by_item = defaultdict(list)
+    for contribution in report_contributions:
+        contributions_by_item[contribution.item_id].append(contribution)
+    items_by_instance = defaultdict(list)
+    for item in report_items:
+        items_by_instance[item.instance_id].append(item)
+
     for instance in instances:
         tasks = []
         checklist_contributors = {}
-        for item in instance.items.all():
-            production_contributions = [
-                contribution
-                for contribution in item.contributions.all()
-                if contribution.staff_id not in test_staff_ids
-            ]
+        for item in items_by_instance[instance.pk]:
+            production_contributions = contributions_by_item[item.pk]
             effective_state = (
                 production_contributions[-1].new_state
                 if production_contributions
@@ -238,9 +240,10 @@ def build_report(*, program, period, filters=None, include_test=False):
     shift_choices = Shift.objects.filter(checklist_definitions__category__program=program)
     if category_id:
         shift_choices = shift_choices.filter(checklist_definitions__category_id=category_id)
-    staff_choices = get_user_model().objects.filter(
-        staff_contributions__item__instance__program=program
-    ).exclude(pk__in=test_staff_ids).distinct().order_by("first_name", "last_name", "username")
+    staff_choices = StaffMember.objects.filter(
+        program=program,
+        staff_contributions__item__instance__program=program,
+    ).distinct().order_by("first_name", "last_name", "id")
     sections = sorted(
         set(
             ChecklistInstance.objects.filter(program=program)
@@ -258,7 +261,6 @@ def build_report(*, program, period, filters=None, include_test=False):
         "shift_choices": shift_choices.distinct().order_by("sort_order", "name"),
         "staff_choices": staff_choices,
         "section_choices": sections,
-        "include_test": include_test,
     }
 
 
@@ -311,4 +313,4 @@ def _positive_int(raw):
 
 
 def _user_name(user):
-    return user.get_full_name() or user.get_username()
+    return user.display_name

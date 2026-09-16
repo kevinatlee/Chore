@@ -8,15 +8,34 @@ from django.utils import timezone
 from .models import (
     ChecklistInstance,
     ChecklistItem,
-    StaffAssignment,
-    StaffContribution,
     ProgramRole,
+    StaffContribution,
+    StaffMember,
     TaskState,
 )
 
 
 SQLITE_LOCK_ATTEMPTS = 5
 SQLITE_LOCK_BACKOFF_SECONDS = 0.05
+
+
+def programs_for_operations(user):
+    from .models import Program
+
+    if not user.is_authenticated or not user.is_active:
+        return Program.objects.none()
+    if user.is_superuser:
+        return Program.objects.filter(is_active=True)
+    return Program.objects.filter(
+        is_active=True,
+        memberships__user=user,
+        memberships__role=ProgramRole.OPERATIONAL,
+        memberships__is_active=True,
+    ).distinct()
+
+
+def can_operate_program(user, program_id):
+    return programs_for_operations(user).filter(pk=program_id).exists()
 
 
 def _run_serialized_write(operation):
@@ -98,9 +117,11 @@ def resolve_checklist(definition, operational_date):
         return ChecklistInstance.objects.get(**lookup)
 
 
-def change_item_state(*, item_id, staff, new_state):
-    if not staff.is_authenticated or not staff.is_active:
-        raise PermissionDenied("An active staff account is required.")
+def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
+    if not system and (
+        actor is None or not actor.is_authenticated or not actor.is_active
+    ):
+        raise PermissionDenied("An active application account is required.")
     if new_state not in TaskState.values:
         raise ValidationError({"state": "Unknown checklist state."})
 
@@ -113,6 +134,7 @@ def change_item_state(*, item_id, staff, new_state):
                     "instance__shift",
                     "instance__definition__category",
                     "instance__definition__shift",
+                    "instance__program",
                     "source_task__section",
                 )
                 .get(pk=item_id)
@@ -131,16 +153,27 @@ def change_item_state(*, item_id, staff, new_state):
                 or definition.category.program_id != item.instance.program_id
             ):
                 raise PermissionDenied("Checklist configuration identity is inconsistent.")
-            assigned = StaffAssignment.objects.filter(
-                user=staff, category_id=item.instance.category_id, is_active=True
-            ).exists()
-            manages_program = staff.program_memberships.filter(
-                program_id=item.instance.program_id,
-                role=ProgramRole.MANAGER,
-                is_active=True,
-            ).exists()
-            if not staff.is_superuser and not assigned and not manages_program:
-                raise PermissionDenied("This staff account is not assigned to the category.")
+            if not system:
+                operational_access = actor.program_memberships.filter(
+                    program_id=item.instance.program_id,
+                    role=ProgramRole.OPERATIONAL,
+                    is_active=True,
+                ).exists()
+                if not actor.is_superuser and not operational_access:
+                    raise PermissionDenied(
+                        "This account is not authorized for operational entry."
+                    )
+            try:
+                selected_staff = StaffMember.objects.get(pk=staff_member.pk)
+            except (AttributeError, StaffMember.DoesNotExist) as exc:
+                raise ValidationError({"staff": "Select a valid staff member."}) from exc
+            if (
+                not selected_staff.is_active
+                or selected_staff.program_id != item.instance.program_id
+            ):
+                raise PermissionDenied(
+                    "The selected staff member is not active in this Program."
+                )
             if new_state == TaskState.NOT_APPLICABLE and not item.allow_na_snapshot:
                 raise ValidationError({"state": "This task cannot be marked N/A."})
             if new_state == item.current_state:
@@ -148,17 +181,18 @@ def change_item_state(*, item_id, staff, new_state):
 
             contribution = StaffContribution.objects.create(
                 item=item,
-                staff=staff,
+                staff=selected_staff,
+                recorded_by=None if system else actor,
                 previous_state=item.current_state,
                 new_state=new_state,
             )
             item.current_state = new_state
-            item.current_contributor = staff
+            item.current_staff = selected_staff
             item.state_changed_at = timezone.now()
             item.save(
                 update_fields=(
                     "current_state",
-                    "current_contributor",
+                    "current_staff",
                     "state_changed_at",
                     "updated_at",
                 )

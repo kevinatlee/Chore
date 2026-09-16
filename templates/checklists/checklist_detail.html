@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ instance.category_name_snapshot }} · {{ instance.shift_name_snapshot }} · Chore{% endblock %}
 {% block content %}
-  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}">← All checklists</a>
+  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}&category={{ instance.category_id }}">← Checklist selector</a>
   <div class="checklist-heading">
     <div>
       <p class="eyebrow">Shared operational checklist</p>
@@ -9,6 +9,7 @@
       <p class="checklist-meta">
         <strong>{{ instance.operational_date|date:"l, F j, Y" }}</strong>
         <span>{{ instance.shift_name_snapshot }}</span>
+        <span>Working as <strong>{{ staff_member.display_name }}</strong></span>
       </p>
     </div>
     <div class="progress-summary">
@@ -32,8 +33,8 @@
               </div>
               <div class="task-attribution">
                 <span class="status status-{{ item.current_state }}">{{ item.get_current_state_display }}</span>
-                {% if item.current_contributor %}
-                  <span>Staff Contribution by {% firstof item.current_contributor.get_full_name item.current_contributor.username %}</span>
+                {% if item.current_staff %}
+                  <span>Staff Contribution by {{ item.current_staff.display_name }}</span>
                   <time datetime="{{ item.state_changed_at|date:'c' }}">{{ item.state_changed_at|date:"M j, H:i" }}</time>
                 {% else %}
                   <span>No Staff Contribution yet</span>
@@ -43,6 +44,7 @@
             <form method="post" action="{% url 'update-item-state' item.id %}" class="task-actions">
               {% csrf_token %}
               <input type="hidden" name="date" value="{{ instance.operational_date|date:'Y-m-d' }}">
+              <input type="hidden" name="staff" value="{{ staff_member.pk }}">
               {% if item.current_state != 'completed' %}
                 <button class="button complete" type="submit" name="state" value="completed">Complete</button>
               {% endif %}
@@ -66,11 +68,11 @@
 
   <section class="contribution-panel">
     <h2>Recent Staff Contributions</h2>
-    <p>Task changes are retained even if a staff account is later deactivated.</p>
+    <p>Task changes are retained even if an operational staff record is later deactivated.</p>
     <ol class="contribution-list">
       {% for contribution in contributions %}
         <li>
-          <strong>{% firstof contribution.staff.get_full_name contribution.staff.username %}</strong>
+          <strong>{{ contribution.staff.display_name }}</strong>
           changed “{{ contribution.item.task_label_snapshot }}” from
           {{ contribution.get_previous_state_display }} to {{ contribution.get_new_state_display }}
           <time datetime="{{ contribution.created_at|date:'c' }}">{{ contribution.created_at|date:"M j, Y H:i" }}</time>

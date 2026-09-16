@@ -45,7 +45,7 @@ class Command(BaseCommand):
             if not recipients:
                 continue
             for cadence, period in scheduled_periods(local_now.date()):
-                report = build_report(program=program, period=period, include_test=False)
+                report = build_report(program=program, period=period)
                 snapshot = report_snapshot(report)
                 subject = (
                     f"Chore {cadence} report — {program.name} — "

@@ -235,19 +235,51 @@ CATEGORIES = [
 ]
 
 SHIFTS = [
-    ("day", "07:00–15:00", "07:00", "15:00", 10),
-    ("evening", "15:00–23:00", "15:00", "23:00", 20),
-    ("overnight", "23:00–07:00", "23:00", "07:00", 30),
-    ("life-skills-day", "08:00–15:00", "08:00", "15:00", 40),
+    ("morning", "Morning", "07:00", "15:00", 10),
+    ("evening", "Evening", "15:00", "23:00", 20),
+    ("night", "Night", "23:00", "07:00", 30),
+]
+
+STAFF_ROSTER = [
+    "Alfred Sampare",
+    "Andrew Bevan",
+    "Chelsea Brown",
+    "Chrystal Auckland",
+    "Daniel Buck",
+    "Destiny Patelas",
+    "Emmalee Pimentel",
+    "Gary Hill",
+    "Gurbinder Singh",
+    "Jacob Larose",
+    "Jaime Houlden",
+    "Jaskirat Singh",
+    "Jeremiah Gerow",
+    "Jolene Williams",
+    "Josh Hansen",
+    "Kianna Coburn",
+    "Konark Rawat",
+    "Lucy Cabral",
+    "Melodie Daigle",
+    "Nadine Morgan",
+    "Nayandeep Singh",
+    "Nicole Morven",
+    "Pranshukh Nayyar",
+    "Ri Sharma",
+    "Ron Bevan",
+    "Roxanne Wagner",
+    "Ruth McMillian",
+    "Sandra Glover",
+    "Sonya Kushnerek",
+    "Vita Hunter",
 ]
 
 DEFINITIONS = [
-    ("front-desk", "day", "Front Desk Day Checklist", 10, FRONT_DESK_DAY_EVENING),
+    ("front-desk", "morning", "Front Desk Morning Checklist", 10, FRONT_DESK_DAY_EVENING),
     ("front-desk", "evening", "Front Desk Evening Checklist", 20, FRONT_DESK_DAY_EVENING),
-    ("front-desk", "overnight", "Front Desk Night Checklist", 30, FRONT_DESK_NIGHT),
-    ("support", "day", "Support Day Checklist", 10, SUPPORT_DAY),
+    ("front-desk", "night", "Front Desk Night Checklist", 30, FRONT_DESK_NIGHT),
+    ("support", "morning", "Support Morning Checklist", 10, SUPPORT_DAY),
     ("support", "evening", "Support Evening Checklist", 20, SUPPORT_EVENING),
-    ("awake-night", "overnight", "Awake Night Checklist", 10, AWAKE_NIGHT),
+    ("awake-night", "night", "Awake Night Checklist", 10, AWAKE_NIGHT),
 ]
 
 # Blank rows in the revised source are intentionally omitted. The 14:45–15:45

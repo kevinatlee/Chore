@@ -4,6 +4,7 @@ from datetime import time
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils.text import slugify
 
 from checklists.models import (
     ChecklistDefinition,
@@ -12,8 +13,8 @@ from checklists.models import (
     ProgramMembership,
     ProgramRole,
     Shift,
-    StaffAssignment,
     StaffCategory,
+    StaffMember,
     TaskDefinition,
 )
 from checklists.seed_data import (
@@ -23,6 +24,7 @@ from checklists.seed_data import (
     LIFE_SKILLS_SLOTS,
     RETIRED_LIFE_SKILLS_SLOTS,
     SHIFTS,
+    STAFF_ROSTER,
 )
 
 
@@ -96,22 +98,22 @@ class Command(BaseCommand):
 
         life_definition = self._upsert_seeded(
             ChecklistDefinition,
-            seed_key="definition-life-skills-life-skills-day",
+            seed_key="definition-life-skills-morning",
             legacy_lookup={
                 "category": categories["life-skills"],
-                "shift": shifts["life-skills-day"],
+                "shift": shifts["morning"],
             },
             defaults={
                 "name": "Life Skills Weekday Schedule",
                 "category": categories["life-skills"],
-                "shift": shifts["life-skills-day"],
+                "shift": shifts["morning"],
                 "sort_order": 10,
                 "is_active": True,
             },
         )
         life_section = self._upsert_seeded(
             ChecklistSection,
-            seed_key="section-life-skills-life-skills-day-01",
+            seed_key="section-life-skills-morning-01",
             legacy_lookup={"definition": life_definition, "sort_order": 10},
             defaults={
                 "definition": life_definition,
@@ -152,62 +154,57 @@ class Command(BaseCommand):
             seed_key__in=active_life_skill_keys
         ).update(is_active=False)
 
-        test_staff = self._seed_user(
-            username="teststaff",
-            first_name="Test",
-            last_name="Staff",
+        active_staff_keys = []
+        for display_name in STAFF_ROSTER:
+            first_name, last_name = display_name.split(" ", 1)
+            seed_key = f"sonder-house-{slugify(display_name)}"
+            active_staff_keys.append(seed_key)
+            StaffMember.objects.update_or_create(
+                seed_key=seed_key,
+                defaults={
+                    "program": program,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "is_active": True,
+                },
+            )
+        StaffMember.objects.filter(seed_key__startswith="sonder-house-").exclude(
+            seed_key__in=active_staff_keys
+        ).update(is_active=False)
+
+        operational_user = self._seed_user(
+            username="sonderhouse",
+            first_name="Sonder House",
+            last_name="Operations",
             is_staff=False,
             is_superuser=False,
-            password_env="CHORE_TEST_STAFF_PASSWORD",
+            password_env="CHORE_OPERATIONAL_PASSWORD",
             reset_passwords=options["reset_passwords"],
         )
-        admin_user = self._seed_user(
-            username="choreadmin",
-            first_name="Development",
-            last_name="Admin",
-            is_staff=True,
-            is_superuser=True,
-            password_env="CHORE_ADMIN_PASSWORD",
-            reset_passwords=options["reset_passwords"],
-        )
-        for category in categories.values():
-            StaffAssignment.objects.update_or_create(
-                user=test_staff, category=category, defaults={"is_active": True}
-            )
         ProgramMembership.objects.update_or_create(
-            user=test_staff,
+            user=operational_user,
             program=program,
             defaults={
-                "role": ProgramRole.STAFF,
+                "role": ProgramRole.OPERATIONAL,
                 "is_active": True,
-                "is_test_staff": True,
                 "receive_scheduled_reports": False,
             },
         )
 
         self.stdout.write(
             self.style.SUCCESS(
-                "Seeded Test Staff, development admin, 4 categories, 4 shifts, "
-                "7 checklists, and 190 active tasks (40 Life Skills)."
+                "Seeded Sonder House operational access, 30 staff, 4 categories, "
+                "3 shifts, 7 checklists, and 190 active tasks (40 Life Skills)."
             )
         )
         if (
-            not os.environ.get("CHORE_TEST_STAFF_PASSWORD")
-            and not test_staff.has_usable_password()
+            not os.environ.get("CHORE_OPERATIONAL_PASSWORD")
+            and not operational_user.has_usable_password()
         ):
             self.stdout.write(
                 self.style.WARNING(
-                    "Test Staff has no usable password. Set CHORE_TEST_STAFF_PASSWORD and rerun "
-                    "with --reset-passwords."
-                )
-            )
-        if (
-            not os.environ.get("CHORE_ADMIN_PASSWORD")
-            and not admin_user.has_usable_password()
-        ):
-            self.stdout.write(
-                self.style.WARNING(
-                    "Development Admin has no usable password. Set CHORE_ADMIN_PASSWORD and rerun "
+                    "The Sonder House operational account has no usable password. Set "
+                    "CHORE_OPERATIONAL_PASSWORD and rerun "
                     "with --reset-passwords."
                 )
             )

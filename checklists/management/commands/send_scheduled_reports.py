@@ -27,6 +27,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if not settings.EMAIL_ENABLED:
+            self.stdout.write(
+                self.style.WARNING(
+                    "Outbound email is disabled; scheduled reports were suppressed."
+                )
+            )
+            return
         local_now = self._local_now(options.get("at"))
         if local_now.time() < time(8):
             self.stdout.write("No scheduled reports are due before 08:00 local time.")

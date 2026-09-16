@@ -8,7 +8,7 @@ The important identity rule is enforced in the database: one operational checkli
 
 - Python 3.12+
 - Django 5.2 LTS
-- SQLite for local development
+- SQLite for local development and the production deployment
 - Server-rendered HTML and responsive CSS
 - Django's built-in session authentication and administration
 
@@ -79,6 +79,14 @@ python -m compileall chore checklists
 git diff --check main..HEAD
 ```
 
+## Production deployment
+
+Phase 4 provides production and test Docker Compose deployments, GHCR `:latest` and
+`:test` image publishing, runtime FQDN/proxy security configuration, global test-email
+suppression, a database-aware healthcheck, and SQLite-safe daily backups. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for initial Unraid setup, Cloudflare Tunnel and
+Gmail configuration, ChoreTest refresh behavior, updates, restores, and rollback.
+
 ## Reporting and operations
 
 Phase 2 adds Program-scoped Manager reporting without changing shared-checklist ownership. Configure Manager `ProgramMembership` records in Django admin; a Manager can report only on authorized Programs and receives scheduled email only when **Receive scheduled reports** is enabled. Report Staff filters and attribution use operational `StaffMember` records.
@@ -101,13 +109,13 @@ python manage.py generate_mock_data --clear
 
 Cleanup removes only ChecklistInstances explicitly marked as mock-generated, plus their Items and Staff Contributions. Real operational history, configuration, roster records, users, and Program memberships remain untouched.
 
-Invoke the scheduler command from the eventual host scheduler at or after 08:00 local time. It determines which daily/weekly/monthly/annual periods are due and uses unique delivery records to avoid repeat sends:
+The production container invokes the scheduler automatically at 08:00 Vancouver time. For local or manual operation, the idempotent report command determines which daily/weekly/monthly/annual periods are due and uses unique delivery records to avoid repeat sends:
 
 ```powershell
 python manage.py send_scheduled_reports
 ```
 
-Email uses Django settings backed by `DJANGO_EMAIL_BACKEND`, `DJANGO_EMAIL_HOST`, `DJANGO_EMAIL_PORT`, `DJANGO_EMAIL_HOST_USER`, `DJANGO_EMAIL_HOST_PASSWORD`, `DJANGO_EMAIL_USE_TLS`, and `DJANGO_DEFAULT_FROM_EMAIL`. No SMTP credential is stored in the repository.
+Production email uses `EMAIL_ENABLED`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, and `DEFAULT_FROM_EMAIL`. The earlier `DJANGO_EMAIL_*` names remain accepted for compatibility. `EMAIL_ENABLED=false` globally suppresses Django email and scheduled-report delivery. No SMTP credential is stored in the repository.
 
 Purge only real, non-mock operational checklists strictly older than the seven-calendar-year boundary with:
 
@@ -125,4 +133,4 @@ python manage.py purge_operational_data --fresh-start
 
 Fresh-start mode removes all non-mock Chore List instances, their item snapshots and Staff Contributions, plus scheduled report delivery history. Generated mock Chore Lists, items, and Staff Contributions remain available for reporting; `python manage.py generate_mock_data --clear` is the explicit way to remove them. Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster are also preserved. The purge contains no named or special-case staff cleanup logic.
 
-Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. Phase 3 intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or deployment automation.
+Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. The application intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or Phase 5 functionality.

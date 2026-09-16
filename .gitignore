@@ -3,7 +3,11 @@ __pycache__/
 *.py[cod]
 db.sqlite3
 .env
+.env.production
+.env.test
 .coverage
 htmlcov/
 .pytest_cache/
+backups/
+staticfiles/
 .DS_Store

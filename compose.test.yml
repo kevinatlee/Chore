@@ -1,0 +1,26 @@
+name: chore-test
+
+services:
+  chore-test:
+    image: ghcr.io/kevinatlee/chore:test
+    container_name: ChoreTest
+    restart: unless-stopped
+    env_file:
+      - .env.test
+    environment:
+      CHORE_DEPLOYMENT_MODE: test
+      CHORE_DATABASE_PATH: /app/data/db.sqlite3
+      CHORE_PRODUCTION_BACKUP_DIR: /production-backups
+      CHORE_BACKUPS_ENABLED: "false"
+      EMAIL_ENABLED: "false"
+      TZ: America/Vancouver
+    volumes:
+      - /mnt/user/appdata/ChoreTest:/app/data
+      - /mnt/user/appdata/Chore/backups:/production-backups:ro
+    ports:
+      - "8001:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,25 @@
+name: chore-production
+
+services:
+  chore:
+    image: ghcr.io/kevinatlee/chore:latest
+    container_name: Chore
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      CHORE_DEPLOYMENT_MODE: production
+      CHORE_DATABASE_PATH: /app/data/db.sqlite3
+      CHORE_BACKUP_DIR: /app/data/backups
+      CHORE_BACKUP_RETENTION: "7"
+      CHORE_BACKUPS_ENABLED: "true"
+      TZ: America/Vancouver
+    volumes:
+      - /mnt/user/appdata/Chore:/app/data
+    ports:
+      - "8000:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

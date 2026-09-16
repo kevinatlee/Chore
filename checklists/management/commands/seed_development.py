@@ -8,6 +8,9 @@ from django.db import transaction
 from checklists.models import (
     ChecklistDefinition,
     ChecklistSection,
+    Program,
+    ProgramMembership,
+    ProgramRole,
     Shift,
     StaffAssignment,
     StaffCategory,
@@ -39,9 +42,14 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        program, _ = Program.objects.update_or_create(
+            slug="sonder-house",
+            defaults={"name": "Sonder House", "is_active": True},
+        )
         categories = {}
         for slug, name, sort_order in CATEGORIES:
             category, _ = StaffCategory.objects.update_or_create(
+                program=program,
                 slug=slug,
                 defaults={"name": name, "sort_order": sort_order, "is_active": True},
             )
@@ -166,6 +174,16 @@ class Command(BaseCommand):
             StaffAssignment.objects.update_or_create(
                 user=test_staff, category=category, defaults={"is_active": True}
             )
+        ProgramMembership.objects.update_or_create(
+            user=test_staff,
+            program=program,
+            defaults={
+                "role": ProgramRole.STAFF,
+                "is_active": True,
+                "is_test_staff": True,
+                "receive_scheduled_reports": False,
+            },
+        )
 
         self.stdout.write(
             self.style.SUCCESS(

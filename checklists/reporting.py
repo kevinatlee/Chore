@@ -1,0 +1,314 @@
+from calendar import monthrange
+from dataclasses import dataclass
+from datetime import date, timedelta
+
+from django.contrib.auth import get_user_model
+from django.db.models import Prefetch, Q
+
+from .models import (
+    ChecklistDefinition,
+    ChecklistInstance,
+    Program,
+    ProgramMembership,
+    ProgramRole,
+    Shift,
+    StaffCategory,
+    StaffContribution,
+    TaskState,
+)
+
+
+@dataclass(frozen=True)
+class ReportPeriod:
+    kind: str
+    start: date
+    end: date
+    label: str
+
+
+def period_from_params(params, today=None):
+    today = today or date.today()
+    kind = params.get("period", "daily")
+    if kind == "daily":
+        selected = _date(params.get("date"), today)
+        return ReportPeriod(kind, selected, selected, f"{selected:%B} {selected.day}, {selected.year}")
+    if kind == "weekly":
+        selected = _date(params.get("date"), today)
+        start = selected - timedelta(days=selected.weekday())
+        end = start + timedelta(days=6)
+        return ReportPeriod(kind, start, end, f"{start:%b %d} – {end:%b %d, %Y}")
+    if kind == "monthly":
+        raw = params.get("month", today.strftime("%Y-%m"))
+        try:
+            year, month = (int(value) for value in raw.split("-", 1))
+            start = date(year, month, 1)
+        except (TypeError, ValueError):
+            start = today.replace(day=1)
+        end = start.replace(day=monthrange(start.year, start.month)[1])
+        return ReportPeriod(kind, start, end, start.strftime("%B %Y"))
+    if kind == "annual":
+        try:
+            year = int(params.get("year", today.year))
+            start = date(year, 1, 1)
+        except (TypeError, ValueError):
+            start = date(today.year, 1, 1)
+        return ReportPeriod(kind, start, date(start.year, 12, 31), str(start.year))
+    if kind == "rolling365":
+        end = _date(params.get("date"), today)
+        start = end - timedelta(days=364)
+        return ReportPeriod(kind, start, end, f"{start:%b %d, %Y} – {end:%b %d, %Y}")
+    return period_from_params({"period": "daily", "date": today.isoformat()}, today)
+
+
+def scheduled_periods(local_day):
+    periods = [("daily", ReportPeriod("daily", local_day - timedelta(days=1), local_day - timedelta(days=1), ""))]
+    if local_day.weekday() == 0:
+        end = local_day - timedelta(days=1)
+        periods.append(("weekly", ReportPeriod("weekly", end - timedelta(days=6), end, "")))
+    if local_day.day == 1:
+        end = local_day - timedelta(days=1)
+        start = end.replace(day=1)
+        periods.append(("monthly", ReportPeriod("monthly", start, end, "")))
+    if local_day.month == 1 and local_day.day == 1:
+        year = local_day.year - 1
+        periods.append(("annual", ReportPeriod("annual", date(year, 1, 1), date(year, 12, 31), "")))
+    return periods
+
+
+def programs_for_reporting(user):
+    if not user.is_authenticated or not user.is_active:
+        return Program.objects.none()
+    if user.is_superuser:
+        return Program.objects.all()
+    return Program.objects.filter(
+        memberships__user=user,
+        memberships__role=ProgramRole.MANAGER,
+        memberships__is_active=True,
+    ).distinct()
+
+
+def selected_program(user, raw_program=None):
+    programs = programs_for_reporting(user)
+    if raw_program:
+        program_id = _positive_int(raw_program)
+        if program_id:
+            return programs.filter(pk=program_id).first()
+        return programs.filter(slug=raw_program).first()
+    return programs.first()
+
+
+def build_report(*, program, period, filters=None, include_test=False):
+    filters = filters or {}
+    test_staff_ids = set()
+    if not include_test:
+        test_staff_ids = set(
+            ProgramMembership.objects.filter(
+                program=program, is_test_staff=True
+            ).values_list("user_id", flat=True)
+        )
+
+    contributions = StaffContribution.objects.select_related("staff").order_by("created_at", "id")
+    instances = (
+        ChecklistInstance.objects.filter(
+            program=program,
+            operational_date__range=(period.start, period.end),
+        )
+        .select_related("category", "shift")
+        .prefetch_related(
+            Prefetch("items__contributions", queryset=contributions),
+            "items__current_contributor",
+        )
+        .order_by("operational_date", "category_name_snapshot", "shift_start_snapshot")
+    )
+
+    category_id = _positive_int(filters.get("category"))
+    if category_id:
+        if StaffCategory.objects.filter(pk=category_id, program=program).exists():
+            instances = instances.filter(category_id=category_id)
+        else:
+            instances = instances.none()
+    shift_id = _positive_int(filters.get("shift"))
+    if shift_id:
+        valid = ChecklistDefinition.objects.filter(
+            category__program=program, shift_id=shift_id
+        )
+        if category_id:
+            valid = valid.filter(category_id=category_id)
+        if valid.exists():
+            instances = instances.filter(shift_id=shift_id)
+        else:
+            instances = instances.none()
+
+    staff_id = _positive_int(filters.get("staff"))
+    state_filter = filters.get("task_state", "")
+    section_filter = filters.get("section", "").strip()
+    status_filter = filters.get("status", "")
+    rows = []
+    totals = {"checklists": 0, "applicable": 0, "completed": 0, "na": 0, "pending": 0}
+
+    for instance in instances:
+        tasks = []
+        checklist_contributors = {}
+        for item in instance.items.all():
+            production_contributions = [
+                contribution
+                for contribution in item.contributions.all()
+                if contribution.staff_id not in test_staff_ids
+            ]
+            effective_state = (
+                production_contributions[-1].new_state
+                if production_contributions
+                else TaskState.PENDING
+            )
+            if effective_state == TaskState.NOT_APPLICABLE and not item.allow_na_snapshot:
+                effective_state = TaskState.PENDING
+            for contribution in production_contributions:
+                checklist_contributors[contribution.staff_id] = _user_name(contribution.staff)
+            tasks.append(
+                {
+                    "id": item.pk,
+                    "section": item.section_name_snapshot,
+                    "label": item.task_label_snapshot,
+                    "state": effective_state,
+                    "state_label": dict(TaskState.choices)[effective_state],
+                    "allow_na": item.allow_na_snapshot,
+                    "changed_at": production_contributions[-1].created_at if production_contributions else None,
+                    "contributor": _user_name(production_contributions[-1].staff) if production_contributions else "",
+                    "contributor_id": production_contributions[-1].staff_id if production_contributions else None,
+                    "contributions": [
+                        {
+                            "staff": _user_name(contribution.staff),
+                            "staff_id": contribution.staff_id,
+                            "previous_state": contribution.previous_state,
+                            "new_state": contribution.new_state,
+                            "created_at": contribution.created_at,
+                        }
+                        for contribution in production_contributions
+                    ],
+                }
+            )
+
+        applicable = sum(task["state"] != TaskState.NOT_APPLICABLE for task in tasks)
+        completed = sum(task["state"] == TaskState.COMPLETED for task in tasks)
+        na_count = sum(task["state"] == TaskState.NOT_APPLICABLE for task in tasks)
+        pending = sum(task["state"] == TaskState.PENDING for task in tasks)
+        status = "completed" if pending == 0 else "incomplete"
+        filtered_tasks = [
+            task
+            for task in tasks
+            if (not staff_id or any(c["staff_id"] == staff_id for c in task["contributions"]))
+            and (state_filter not in TaskState.values or task["state"] == state_filter)
+            and (not section_filter or task["section"] == section_filter)
+        ]
+        if (staff_id or state_filter in TaskState.values or section_filter) and not filtered_tasks:
+            continue
+        if status_filter in {"completed", "incomplete"} and status != status_filter:
+            continue
+
+        row = {
+            "id": instance.pk,
+            "operational_date": instance.operational_date,
+            "category": instance.category_name_snapshot,
+            "category_id": instance.category_id,
+            "shift": instance.shift_name_snapshot,
+            "shift_id": instance.shift_id,
+            "status": status,
+            "applicable_count": applicable,
+            "completed_count": completed,
+            "na_count": na_count,
+            "pending_count": pending,
+            "completion_percentage": round((completed / applicable) * 100, 1) if applicable else 100.0,
+            "contributors": list(checklist_contributors.values()),
+            "tasks": tasks,
+            "filtered_tasks": filtered_tasks,
+        }
+        rows.append(row)
+        totals["checklists"] += 1
+        totals["applicable"] += applicable
+        totals["completed"] += completed
+        totals["na"] += na_count
+        totals["pending"] += pending
+
+    totals["completion_percentage"] = (
+        round((totals["completed"] / totals["applicable"]) * 100, 1)
+        if totals["applicable"]
+        else (100.0 if totals["checklists"] else 0.0)
+    )
+    category_choices = StaffCategory.objects.filter(program=program).order_by("sort_order", "name")
+    shift_choices = Shift.objects.filter(checklist_definitions__category__program=program)
+    if category_id:
+        shift_choices = shift_choices.filter(checklist_definitions__category_id=category_id)
+    staff_choices = get_user_model().objects.filter(
+        staff_contributions__item__instance__program=program
+    ).exclude(pk__in=test_staff_ids).distinct().order_by("first_name", "last_name", "username")
+    sections = sorted(
+        set(
+            ChecklistInstance.objects.filter(program=program)
+            .values_list("items__section_name_snapshot", flat=True)
+            .exclude(items__section_name_snapshot__isnull=True)
+        )
+    )
+    return {
+        "program": program,
+        "period": period,
+        "rows": rows,
+        "totals": totals,
+        "filters": filters,
+        "category_choices": category_choices,
+        "shift_choices": shift_choices.distinct().order_by("sort_order", "name"),
+        "staff_choices": staff_choices,
+        "section_choices": sections,
+        "include_test": include_test,
+    }
+
+
+def report_snapshot(report):
+    return {
+        "program": {"id": report["program"].pk, "name": report["program"].name},
+        "period": {
+            "kind": report["period"].kind,
+            "start": report["period"].start.isoformat(),
+            "end": report["period"].end.isoformat(),
+        },
+        "totals": report["totals"],
+        "checklists": [
+            {
+                **{key: value for key, value in row.items() if key not in {"tasks", "filtered_tasks"}},
+                "operational_date": row["operational_date"].isoformat(),
+                "tasks": [
+                    {
+                        **{key: value for key, value in task.items() if key not in {"changed_at", "contributions"}},
+                        "changed_at": task["changed_at"].isoformat() if task["changed_at"] else None,
+                        "contributions": [
+                            {
+                                **{key: value for key, value in contribution.items() if key != "created_at"},
+                                "created_at": contribution["created_at"].isoformat(),
+                            }
+                            for contribution in task["contributions"]
+                        ],
+                    }
+                    for task in row["tasks"]
+                ],
+            }
+            for row in report["rows"]
+        ],
+    }
+
+
+def _date(raw, fallback):
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _positive_int(raw):
+    try:
+        value = int(raw)
+        return value if value > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _user_name(user):
+    return user.get_full_name() or user.get_username()

@@ -10,6 +10,7 @@ from .models import (
     ChecklistItem,
     StaffAssignment,
     StaffContribution,
+    ProgramRole,
     TaskState,
 )
 
@@ -32,7 +33,12 @@ def _run_serialized_write(operation):
 
 
 def _configuration_is_active(definition):
-    return definition.is_active and definition.category.is_active and definition.shift.is_active
+    return (
+        definition.is_active
+        and definition.category.is_active
+        and definition.category.program.is_active
+        and definition.shift.is_active
+    )
 
 
 def resolve_checklist(definition, operational_date):
@@ -40,6 +46,7 @@ def resolve_checklist(definition, operational_date):
     if not _configuration_is_active(definition):
         raise PermissionDenied("This checklist configuration is inactive.")
     lookup = {
+        "program": definition.category.program,
         "operational_date": operational_date,
         "category": definition.category,
         "shift": definition.shift,
@@ -121,13 +128,18 @@ def change_item_state(*, item_id, staff, new_state):
             if (
                 definition.category_id != item.instance.category_id
                 or definition.shift_id != item.instance.shift_id
+                or definition.category.program_id != item.instance.program_id
             ):
                 raise PermissionDenied("Checklist configuration identity is inconsistent.")
-            if not staff.is_staff and not StaffAssignment.objects.filter(
-                user=staff,
-                category_id=item.instance.category_id,
+            assigned = StaffAssignment.objects.filter(
+                user=staff, category_id=item.instance.category_id, is_active=True
+            ).exists()
+            manages_program = staff.program_memberships.filter(
+                program_id=item.instance.program_id,
+                role=ProgramRole.MANAGER,
                 is_active=True,
-            ).exists():
+            ).exists()
+            if not staff.is_superuser and not assigned and not manages_program:
                 raise PermissionDenied("This staff account is not assigned to the category.")
             if new_state == TaskState.NOT_APPLICABLE and not item.allow_na_snapshot:
                 raise ValidationError({"state": "This task cannot be marked N/A."})

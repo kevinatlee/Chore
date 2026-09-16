@@ -6,6 +6,61 @@ from django.db import models
 from django.db.models import Q
 
 
+def get_default_program_pk():
+    """Keep Phase 1 callers compatible while assigning every record to a Program."""
+    return Program.objects.get_or_create(
+        slug="sonder-house", defaults={"name": "Sonder House"}
+    )[0].pk
+
+
+class Program(models.Model):
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=80, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("name", "id")
+
+    def __str__(self):
+        return self.name
+
+
+class ProgramRole(models.TextChoices):
+    STAFF = "staff", "Staff"
+    MANAGER = "manager", "Manager"
+
+
+class ProgramMembership(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="program_memberships"
+    )
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="memberships"
+    )
+    role = models.CharField(max_length=16, choices=ProgramRole.choices)
+    is_active = models.BooleanField(default=True)
+    is_test_staff = models.BooleanField(default=False)
+    receive_scheduled_reports = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ("program__name", "role", "user__username")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "program"), name="unique_user_program_membership"
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.receive_scheduled_reports and self.role != ProgramRole.MANAGER:
+            raise ValidationError(
+                {"receive_scheduled_reports": "Only Managers may receive scheduled reports."}
+            )
+
+    def __str__(self):
+        return f"{self.user} — {self.program} ({self.get_role_display()})"
+
+
 class ActiveOrderedModel(models.Model):
     name = models.CharField(max_length=120)
     sort_order = models.PositiveIntegerField(default=0)
@@ -20,10 +75,21 @@ class ActiveOrderedModel(models.Model):
 
 
 class StaffCategory(ActiveOrderedModel):
-    slug = models.SlugField(max_length=80, unique=True)
+    program = models.ForeignKey(
+        Program,
+        on_delete=models.PROTECT,
+        related_name="staff_categories",
+        default=get_default_program_pk,
+    )
+    slug = models.SlugField(max_length=80)
 
     class Meta(ActiveOrderedModel.Meta):
         verbose_name_plural = "staff categories"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("program", "slug"), name="unique_program_category_slug"
+            )
+        ]
 
 
 class Shift(ActiveOrderedModel):
@@ -210,6 +276,12 @@ class TaskState(models.TextChoices):
 
 
 class ChecklistInstance(models.Model):
+    program = models.ForeignKey(
+        Program,
+        on_delete=models.PROTECT,
+        related_name="checklist_instances",
+        default=get_default_program_pk,
+    )
     operational_date = models.DateField()
     definition = models.ForeignKey(
         ChecklistDefinition, on_delete=models.PROTECT, related_name="instances"
@@ -250,6 +322,8 @@ class ChecklistInstance(models.Model):
             errors["category"] = "Category must match the checklist definition."
         if self.shift_id and definition.shift_id != self.shift_id:
             errors["shift"] = "Shift must match the checklist definition."
+        if self.program_id and definition.category.program_id != self.program_id:
+            errors["program"] = "Program must match the checklist category."
         if errors:
             raise ValidationError(errors)
 
@@ -354,3 +428,61 @@ class StaffContribution(models.Model):
 
     def __str__(self):
         return f"{self.staff}: {self.previous_state} → {self.new_state}"
+
+
+class ReportCadence(models.TextChoices):
+    DAILY = "daily", "Daily"
+    WEEKLY = "weekly", "Weekly"
+    MONTHLY = "monthly", "Monthly"
+    ANNUAL = "annual", "Annual"
+
+
+class DeliveryState(models.TextChoices):
+    PENDING = "pending", "Pending"
+    SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
+
+
+class ScheduledReportDelivery(models.Model):
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="report_deliveries"
+    )
+    cadence = models.CharField(max_length=16, choices=ReportCadence.choices)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="scheduled_report_deliveries",
+    )
+    recipient_email = models.EmailField()
+    generated_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    state = models.CharField(
+        max_length=16, choices=DeliveryState.choices, default=DeliveryState.PENDING
+    )
+    subject = models.CharField(max_length=255)
+    body_html = models.TextField()
+    snapshot = models.JSONField(default=dict)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ("-period_end", "program__name", "cadence", "recipient_email")
+        constraints = [
+            models.UniqueConstraint(
+                fields=(
+                    "program",
+                    "cadence",
+                    "period_start",
+                    "period_end",
+                    "recipient",
+                ),
+                name="unique_scheduled_report_delivery",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.program} {self.get_cadence_display()} "
+            f"{self.period_start}–{self.period_end} to {self.recipient_email}"
+        )

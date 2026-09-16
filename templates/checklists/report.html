@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Reports · Chore{% endblock %}
+{% block content %}
+  <div class="page-heading report-heading">
+    <div>
+      <p class="eyebrow">{{ program.name }}</p>
+      <h1>Operational reports</h1>
+      <p>{{ period.label }} · Live from current stored operational data.</p>
+    </div>
+    <div class="report-actions">
+      <a class="button secondary" href="{% url 'report-csv' %}?{{ query_string }}">Export CSV</a>
+      <a class="button secondary" href="{% url 'report-print' %}?{{ query_string }}">Print / Save PDF</a>
+    </div>
+  </div>
+
+  <form method="get" class="report-filters">
+    {% if available_programs.count > 1 %}
+      <label>Program
+        <select name="program">
+          {% for choice in available_programs %}<option value="{{ choice.pk }}" {% if choice.pk == program.pk %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+        </select>
+      </label>
+    {% endif %}
+    <label>Period
+      <select name="period">
+        <option value="daily" {% if period.kind == 'daily' %}selected{% endif %}>Daily</option>
+        <option value="weekly" {% if period.kind == 'weekly' %}selected{% endif %}>Weekly</option>
+        <option value="monthly" {% if period.kind == 'monthly' %}selected{% endif %}>Monthly</option>
+        <option value="annual" {% if period.kind == 'annual' %}selected{% endif %}>Calendar year</option>
+        <option value="rolling365" {% if period.kind == 'rolling365' %}selected{% endif %}>Rolling 365 days</option>
+      </select>
+    </label>
+    <label>Date / week / rolling end
+      <input type="date" name="date" value="{% firstof filters.date period.end|date:'Y-m-d' %}">
+    </label>
+    <label>Month
+      <input type="month" name="month" value="{% firstof filters.month period.start|date:'Y-m' %}">
+    </label>
+    <label>Year
+      <input type="number" name="year" min="2000" max="2200" value="{% firstof filters.year period.start|date:'Y' %}">
+    </label>
+    <label>Staff category
+      <select name="category">
+        <option value="">All categories</option>
+        {% for choice in category_choices %}<option value="{{ choice.pk }}" {% if filters.category == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Shift
+      <select name="shift">
+        <option value="">All valid shifts</option>
+        {% for choice in shift_choices %}<option value="{{ choice.pk }}" {% if filters.shift == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Staff contribution
+      <select name="staff">
+        <option value="">All contributors</option>
+        {% for choice in staff_choices %}<option value="{{ choice.pk }}" {% if filters.staff == choice.pk|stringformat:'s' %}selected{% endif %}>{% firstof choice.get_full_name choice.username %}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Checklist state
+      <select name="status">
+        <option value="">All states</option>
+        <option value="completed" {% if filters.status == 'completed' %}selected{% endif %}>Completed</option>
+        <option value="incomplete" {% if filters.status == 'incomplete' %}selected{% endif %}>Incomplete</option>
+      </select>
+    </label>
+    <label>Task state
+      <select name="task_state">
+        <option value="">Any task state</option>
+        <option value="pending" {% if filters.task_state == 'pending' %}selected{% endif %}>Pending</option>
+        <option value="completed" {% if filters.task_state == 'completed' %}selected{% endif %}>Completed</option>
+        <option value="na" {% if filters.task_state == 'na' %}selected{% endif %}>N/A</option>
+      </select>
+    </label>
+    <label>Section
+      <select name="section">
+        <option value="">All sections</option>
+        {% for choice in section_choices %}<option value="{{ choice }}" {% if filters.section == choice %}selected{% endif %}>{{ choice }}</option>{% endfor %}
+      </select>
+    </label>
+    {% if user.is_superuser %}
+      <label class="checkbox-label"><input type="checkbox" name="include_test" value="1" {% if include_test %}checked{% endif %}> Include Test Staff (admin inspection)</label>
+    {% endif %}
+    <div class="filter-actions"><button class="button primary" type="submit">Apply filters</button><a class="button secondary" href="{% url 'reports' %}">Reset</a></div>
+  </form>
+
+  <div class="summary-grid" aria-label="Report summary">
+    <div><strong>{{ totals.checklists }}</strong><span>Checklists</span></div>
+    <div><strong>{{ totals.completed }}/{{ totals.applicable }}</strong><span>Applicable tasks completed</span></div>
+    <div><strong>{{ totals.na }}</strong><span>N/A</span></div>
+    <div><strong>{{ totals.pending }}</strong><span>Pending</span></div>
+    <div><strong>{{ totals.completion_percentage }}%</strong><span>Completion</span></div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="report-table">
+      <thead><tr><th>Date</th><th>Category</th><th>Shift</th><th>State</th><th>Completed</th><th>N/A</th><th>Pending</th><th>Completion</th><th>Contributors</th><th></th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.operational_date|date:"Y-m-d" }}</td><td>{{ row.category }}</td><td>{{ row.shift }}</td>
+            <td><span class="status status-{{ row.status }}">{{ row.status|title }}</span></td>
+            <td>{{ row.completed_count }}/{{ row.applicable_count }}</td><td>{{ row.na_count }}</td><td>{{ row.pending_count }}</td><td>{{ row.completion_percentage }}%</td>
+            <td>{% for contributor in row.contributors %}{{ contributor }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}</td>
+            <td><a href="{% url 'report-detail' row.id %}?{{ query_string }}">Drill down</a></td>
+          </tr>
+        {% empty %}<tr><td colspan="10">No operational checklists match this period and filter set.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

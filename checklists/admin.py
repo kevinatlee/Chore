@@ -5,6 +5,9 @@ from .models import (
     ChecklistInstance,
     ChecklistItem,
     ChecklistSection,
+    Program,
+    ProgramMembership,
+    ScheduledReportDelivery,
     Shift,
     StaffAssignment,
     StaffCategory,
@@ -15,13 +18,35 @@ from .models import (
 
 admin.site.site_header = "Chore administration"
 admin.site.site_title = "Chore admin"
-admin.site.index_title = "Phase 1 configuration"
+admin.site.index_title = "Chore configuration and reporting"
+
+
+@admin.register(Program)
+class ProgramAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "is_active")
+    list_editable = ("is_active",)
+    search_fields = ("name", "slug")
+
+
+@admin.register(ProgramMembership)
+class ProgramMembershipAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "program",
+        "role",
+        "is_test_staff",
+        "receive_scheduled_reports",
+        "is_active",
+    )
+    list_filter = ("program", "role", "is_test_staff", "receive_scheduled_reports", "is_active")
+    search_fields = ("user__username", "user__first_name", "user__last_name")
 
 
 @admin.register(StaffCategory)
 class StaffCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "sort_order", "is_active")
+    list_display = ("name", "program", "slug", "sort_order", "is_active")
     list_editable = ("sort_order", "is_active")
+    list_filter = ("program", "is_active")
     search_fields = ("name", "slug")
 
 
@@ -35,7 +60,7 @@ class ShiftAdmin(admin.ModelAdmin):
 class ChecklistDefinitionAdmin(admin.ModelAdmin):
     list_display = ("name", "category", "shift", "sort_order", "is_active")
     list_editable = ("sort_order", "is_active")
-    list_filter = ("category", "shift", "is_active")
+    list_filter = ("category__program", "category", "shift", "is_active")
 
     def get_readonly_fields(self, request, obj=None):
         if obj and obj.instances.exists():
@@ -82,7 +107,7 @@ class TaskDefinitionAdmin(admin.ModelAdmin):
 class StaffAssignmentAdmin(admin.ModelAdmin):
     list_display = ("user", "category", "is_active")
     list_editable = ("is_active",)
-    list_filter = ("category", "is_active")
+    list_filter = ("category__program", "category", "is_active")
     search_fields = ("user__username", "user__first_name", "user__last_name")
 
 
@@ -179,6 +204,42 @@ class StaffContributionAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return request.method in ("GET", "HEAD", "OPTIONS")
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ScheduledReportDelivery)
+class ScheduledReportDeliveryAdmin(admin.ModelAdmin):
+    list_display = (
+        "program",
+        "cadence",
+        "period_start",
+        "period_end",
+        "recipient_email",
+        "state",
+        "sent_at",
+    )
+    list_filter = ("program", "cadence", "state")
+    search_fields = ("recipient_email", "subject")
+    readonly_fields = (
+        "program",
+        "cadence",
+        "period_start",
+        "period_end",
+        "recipient",
+        "recipient_email",
+        "generated_at",
+        "sent_at",
+        "state",
+        "subject",
+        "body_html",
+        "snapshot",
+        "error_message",
+    )
+
+    def has_add_permission(self, request):
+        return False
 
     def has_delete_permission(self, request, obj=None):
         return False

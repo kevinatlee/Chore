@@ -1,12 +1,14 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time
+from threading import Barrier
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.db import IntegrityError, close_old_connections, transaction
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 
 from .models import (
@@ -52,6 +54,8 @@ class SharedChecklistDomainTests(TestCase):
             label="Complete Shift Exchange",
             sort_order=10,
             allow_na=False,
+            scheduled_start=time(8),
+            scheduled_end=time(9),
         )
         self.optional_task = TaskDefinition.objects.create(
             section=self.section,
@@ -171,6 +175,58 @@ class SharedChecklistDomainTests(TestCase):
         self.assertEqual(item.task_label_snapshot, "Complete Shift Exchange")
         self.assertFalse(item.allow_na_snapshot)
 
+    def test_configuration_edits_do_not_rewrite_any_historical_snapshot(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.regular_task)
+
+        self.category.name = "Renamed Support"
+        self.category.save(update_fields=("name",))
+        self.shift.name = "Renamed Day"
+        self.shift.start_time = time(6)
+        self.shift.end_time = time(14)
+        self.shift.save(update_fields=("name", "start_time", "end_time"))
+        self.section.name = "Renamed Office"
+        self.section.sort_order = 90
+        self.section.save(update_fields=("name", "sort_order"))
+        self.regular_task.label = "Renamed task"
+        self.regular_task.sort_order = 90
+        self.regular_task.scheduled_start = time(10)
+        self.regular_task.scheduled_end = time(11)
+        self.regular_task.save(
+            update_fields=("label", "sort_order", "scheduled_start", "scheduled_end")
+        )
+
+        instance.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(instance.category_name_snapshot, "Support")
+        self.assertEqual(instance.shift_name_snapshot, "07:00–15:00")
+        self.assertEqual(instance.shift_start_snapshot, time(7))
+        self.assertEqual(instance.shift_end_snapshot, time(15))
+        self.assertEqual(item.section_name_snapshot, "Office Responsibilities")
+        self.assertEqual(item.section_order_snapshot, 10)
+        self.assertEqual(item.task_label_snapshot, "Complete Shift Exchange")
+        self.assertEqual(item.task_order_snapshot, 10)
+        self.assertEqual(item.scheduled_start_snapshot, time(8))
+        self.assertEqual(item.scheduled_end_snapshot, time(9))
+
+    def test_definition_identity_is_immutable_after_operational_use(self):
+        resolve_checklist(self.definition, self.operational_date)
+        other_category = StaffCategory.objects.create(
+            name="Other", slug="other", sort_order=20
+        )
+        other_shift = Shift.objects.create(
+            name="15:00–23:00", start_time=time(15), end_time=time(23), sort_order=20
+        )
+
+        self.definition.category = other_category
+        with self.assertRaises(ValidationError):
+            self.definition.save()
+
+        self.definition.refresh_from_db()
+        self.definition.shift = other_shift
+        with self.assertRaises(ValidationError):
+            self.definition.save()
+
     def test_database_constraint_prevents_duplicate_operational_checklist(self):
         instance = resolve_checklist(self.definition, self.operational_date)
 
@@ -213,6 +269,138 @@ class SharedChecklistDomainTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_unassigned_staff_cannot_post_state_change(self):
+        outsider = get_user_model().objects.create_user(
+            username="state-outsider", password="safe-test-password"
+        )
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.regular_task)
+        self.client.force_login(outsider)
+
+        response = self.client.post(
+            reverse("update-item-state", args=(item.id,)),
+            {"state": TaskState.COMPLETED, "date": self.operational_date.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, TaskState.PENDING)
+        self.assertFalse(item.contributions.exists())
+
+    def test_inactive_configuration_rejects_direct_state_change_posts(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.regular_task)
+        self.client.force_login(self.staff_a)
+        configuration = (
+            self.category,
+            self.shift,
+            self.definition,
+            self.section,
+            self.regular_task,
+        )
+
+        for configured_object in configuration:
+            with self.subTest(model=type(configured_object).__name__):
+                configured_object.is_active = False
+                configured_object.save(update_fields=("is_active",))
+                response = self.client.post(
+                    reverse("update-item-state", args=(item.id,)),
+                    {
+                        "state": TaskState.COMPLETED,
+                        "date": self.operational_date.isoformat(),
+                    },
+                )
+                self.assertEqual(response.status_code, 403)
+                item.refresh_from_db()
+                self.assertEqual(item.current_state, TaskState.PENDING)
+                configured_object.is_active = True
+                configured_object.save(update_fields=("is_active",))
+
+
+class ConcurrentChecklistTests(TransactionTestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.staff_a = User.objects.create_user(username="thread-a", password="safe-password")
+        self.staff_b = User.objects.create_user(username="thread-b", password="safe-password")
+        self.category = StaffCategory.objects.create(
+            name="Concurrent Support", slug="concurrent-support", sort_order=10
+        )
+        self.shift = Shift.objects.create(
+            name="07:00–15:00", start_time=time(7), end_time=time(15), sort_order=10
+        )
+        self.definition = ChecklistDefinition.objects.create(
+            name="Concurrent Checklist",
+            category=self.category,
+            shift=self.shift,
+            sort_order=10,
+        )
+        section = ChecklistSection.objects.create(
+            definition=self.definition, name="Office", sort_order=10
+        )
+        self.task = TaskDefinition.objects.create(
+            section=section, label="Concurrent task", sort_order=10, allow_na=True
+        )
+        for user in (self.staff_a, self.staff_b):
+            StaffAssignment.objects.create(user=user, category=self.category)
+        self.operational_date = date(2026, 9, 15)
+
+    def _run_together(self, operations):
+        barrier = Barrier(len(operations))
+
+        def run(operation):
+            close_old_connections()
+            try:
+                barrier.wait()
+                return operation()
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=len(operations)) as executor:
+            futures = [executor.submit(run, operation) for operation in operations]
+            return [future.result(timeout=10) for future in futures]
+
+    def test_concurrent_lazy_creation_returns_one_shared_checklist(self):
+        def resolve():
+            definition = ChecklistDefinition.objects.select_related(
+                "category", "shift"
+            ).get(pk=self.definition.pk)
+            return resolve_checklist(definition, self.operational_date).pk
+
+        instance_ids = self._run_together((resolve, resolve))
+
+        self.assertEqual(instance_ids[0], instance_ids[1])
+        self.assertEqual(ChecklistInstance.objects.count(), 1)
+        self.assertEqual(ChecklistInstance.objects.get().items.count(), 1)
+
+    def test_concurrent_state_changes_are_serialized_with_coherent_history(self):
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.task)
+
+        def change(user_id, state):
+            def operation():
+                staff = get_user_model().objects.get(pk=user_id)
+                changed_item, contribution = change_item_state(
+                    item_id=item.pk, staff=staff, new_state=state
+                )
+                return changed_item.current_state, contribution.pk
+
+            return operation
+
+        results = self._run_together(
+            (
+                change(self.staff_a.pk, TaskState.COMPLETED),
+                change(self.staff_b.pk, TaskState.NOT_APPLICABLE),
+            )
+        )
+
+        contributions = list(item.contributions.order_by("created_at", "id"))
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(contributions), 2)
+        self.assertEqual(contributions[0].previous_state, TaskState.PENDING)
+        self.assertEqual(contributions[1].previous_state, contributions[0].new_state)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, contributions[1].new_state)
 
 
 class SeedConfigurationTests(TestCase):

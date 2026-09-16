@@ -60,6 +60,34 @@ class ChecklistDefinition(ActiveOrderedModel):
     def __str__(self):
         return f"{self.category.name} — {self.shift.name}"
 
+    def _validate_operational_identity(self):
+        if not self.pk:
+            return
+        original = type(self).objects.filter(pk=self.pk).values(
+            "category_id", "shift_id"
+        ).first()
+        if not original or not self.instances.exists():
+            return
+        errors = {}
+        if original["category_id"] != self.category_id:
+            errors["category"] = (
+                "Category cannot change after this definition has operational checklists."
+            )
+        if original["shift_id"] != self.shift_id:
+            errors["shift"] = (
+                "Shift cannot change after this definition has operational checklists."
+            )
+        if errors:
+            raise ValidationError(errors)
+
+    def clean(self):
+        super().clean()
+        self._validate_operational_identity()
+
+    def save(self, *args, **kwargs):
+        self._validate_operational_identity()
+        return super().save(*args, **kwargs)
+
 
 class ChecklistSection(ActiveOrderedModel):
     definition = models.ForeignKey(
@@ -201,6 +229,26 @@ class ChecklistInstance(models.Model):
             f"{self.shift_name_snapshot}"
         )
 
+    def _validate_definition_identity(self):
+        if not self.definition_id:
+            return
+        definition = self.definition
+        errors = {}
+        if self.category_id and definition.category_id != self.category_id:
+            errors["category"] = "Category must match the checklist definition."
+        if self.shift_id and definition.shift_id != self.shift_id:
+            errors["shift"] = "Shift must match the checklist definition."
+        if errors:
+            raise ValidationError(errors)
+
+    def clean(self):
+        super().clean()
+        self._validate_definition_identity()
+
+    def save(self, *args, **kwargs):
+        self._validate_definition_identity()
+        return super().save(*args, **kwargs)
+
 
 class ChecklistItem(models.Model):
     instance = models.ForeignKey(
@@ -294,4 +342,3 @@ class StaffContribution(models.Model):
 
     def __str__(self):
         return f"{self.staff}: {self.previous_state} → {self.new_state}"
-

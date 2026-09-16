@@ -37,6 +37,11 @@ class ChecklistDefinitionAdmin(admin.ModelAdmin):
     list_editable = ("sort_order", "is_active")
     list_filter = ("category", "shift", "is_active")
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj and obj.instances.exists():
+            return ("category", "shift")
+        return ()
+
 
 @admin.register(ChecklistSection)
 class ChecklistSectionAdmin(admin.ModelAdmin):
@@ -177,4 +182,3 @@ class StaffContributionAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
-

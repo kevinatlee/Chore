@@ -63,7 +63,13 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": os.environ.get("CHORE_DATABASE_PATH", BASE_DIR / "db.sqlite3"),
-        "OPTIONS": {"timeout": 20},
+        "OPTIONS": {
+            "timeout": 20,
+            # Acquire SQLite's write reservation when an atomic block begins. This
+            # avoids deferred-transaction lock upgrades during shared checklist
+            # creation and task state changes.
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 }
 
@@ -87,4 +93,3 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"
 LOGOUT_REDIRECT_URL = "login"
-

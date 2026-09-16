@@ -120,10 +120,6 @@ def update_item_state(request, item_id):
         ChecklistItem.objects.select_related("instance__category", "instance__definition"),
         pk=item_id,
     )
-    if not _can_access_category(request.user, item.instance.category_id):
-        from django.core.exceptions import PermissionDenied
-
-        raise PermissionDenied
     try:
         _, contribution = change_item_state(
             item_id=item_id, staff=request.user, new_state=request.POST.get("state", "")

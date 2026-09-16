@@ -70,6 +70,7 @@ class FreshStartPurgeTests(TestCase):
             label="Test task",
             sort_order=10,
         )
+
         self.instance = resolve_checklist(self.definition, self.operational_date)
         self.item = self.instance.items.get(source_task=self.task)
         change_item_state(
@@ -79,6 +80,19 @@ class FreshStartPurgeTests(TestCase):
             new_state=TaskState.COMPLETED,
             system=True,
         )
+
+        self.mock_instance = resolve_checklist(self.definition, date(2026, 9, 15))
+        self.mock_instance.is_mock_data = True
+        self.mock_instance.save(update_fields=("is_mock_data",))
+        self.mock_item = self.mock_instance.items.get(source_task=self.task)
+        change_item_state(
+            item_id=self.mock_item.pk,
+            actor=None,
+            staff_member=self.staff,
+            new_state=TaskState.COMPLETED,
+            system=True,
+        )
+
         self.delivery = ScheduledReportDelivery.objects.create(
             program=self.program,
             cadence=ReportCadence.DAILY,
@@ -91,7 +105,7 @@ class FreshStartPurgeTests(TestCase):
             snapshot={"test": True},
         )
 
-    def test_fresh_start_dry_run_preserves_runtime_data(self):
+    def test_fresh_start_dry_run_preserves_runtime_and_mock_data(self):
         output = StringIO()
 
         call_command(
@@ -104,17 +118,23 @@ class FreshStartPurgeTests(TestCase):
 
         self.assertTrue(ChecklistInstance.objects.filter(pk=self.instance.pk).exists())
         self.assertTrue(ChecklistItem.objects.filter(pk=self.item.pk).exists())
-        self.assertEqual(StaffContribution.objects.count(), 1)
+        self.assertTrue(ChecklistInstance.objects.filter(pk=self.mock_instance.pk).exists())
+        self.assertTrue(ChecklistItem.objects.filter(pk=self.mock_item.pk).exists())
+        self.assertEqual(StaffContribution.objects.count(), 2)
         self.assertTrue(ScheduledReportDelivery.objects.filter(pk=self.delivery.pk).exists())
         self.assertIn("Dry run (fresh start)", output.getvalue())
-        self.assertIn("scheduled report delivery record(s)", output.getvalue())
+        self.assertIn("preserving 1 generated mock checklist(s)", output.getvalue())
 
-    def test_fresh_start_removes_runtime_history_and_preserves_configuration(self):
+    def test_fresh_start_removes_real_runtime_history_and_preserves_mock_and_configuration(self):
         call_command("purge_operational_data", fresh_start=True, verbosity=0)
 
-        self.assertEqual(ChecklistInstance.objects.count(), 0)
-        self.assertEqual(ChecklistItem.objects.count(), 0)
-        self.assertEqual(StaffContribution.objects.count(), 0)
+        self.assertFalse(ChecklistInstance.objects.filter(pk=self.instance.pk).exists())
+        self.assertFalse(ChecklistItem.objects.filter(pk=self.item.pk).exists())
+        self.assertTrue(ChecklistInstance.objects.filter(pk=self.mock_instance.pk).exists())
+        self.assertTrue(ChecklistItem.objects.filter(pk=self.mock_item.pk).exists())
+        self.assertEqual(ChecklistInstance.objects.count(), 1)
+        self.assertEqual(ChecklistItem.objects.count(), 1)
+        self.assertEqual(StaffContribution.objects.count(), 1)
         self.assertEqual(ScheduledReportDelivery.objects.count(), 0)
 
         self.assertTrue(get_user_model().objects.filter(pk=self.user.pk).exists())
@@ -126,6 +146,19 @@ class FreshStartPurgeTests(TestCase):
         self.assertTrue(ChecklistDefinition.objects.filter(pk=self.definition.pk).exists())
         self.assertTrue(ChecklistSection.objects.filter(pk=self.section.pk).exists())
         self.assertTrue(TaskDefinition.objects.filter(pk=self.task.pk).exists())
+
+    def test_retention_preserves_old_mock_history(self):
+        old_mock = resolve_checklist(self.definition, date(2018, 1, 1))
+        old_mock.is_mock_data = True
+        old_mock.save(update_fields=("is_mock_data",))
+
+        call_command(
+            "purge_operational_data",
+            as_of="2026-09-16",
+            verbosity=0,
+        )
+
+        self.assertTrue(ChecklistInstance.objects.filter(pk=old_mock.pk).exists())
 
     def test_fresh_start_rejects_retention_date(self):
         with self.assertRaisesMessage(

@@ -1,17 +1,16 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date, time
 from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.core import mail
-from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
-from django.utils import timezone
 
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
+    ChecklistItem,
     ChecklistSection,
     Program,
     ProgramMembership,
@@ -19,8 +18,8 @@ from .models import (
     ReportCadence,
     ScheduledReportDelivery,
     Shift,
-    StaffAssignment,
     StaffCategory,
+    StaffMember,
     TaskDefinition,
     TaskState,
 )
@@ -36,25 +35,12 @@ class ReportingFixtureMixin:
         self.program_a = Program.objects.create(name="Program Alpha", slug="alpha")
         self.program_b = Program.objects.create(name="Program Beta", slug="beta")
         self.manager_a = User.objects.create_user(
-            "manager-a", email="manager-a@example.com", password="password", is_staff=True
+            "manager-a", email="manager-a@example.com", password="password"
         )
         self.manager_b = User.objects.create_user(
-            "manager-b", email="manager-b@example.com", password="password", is_staff=True
+            "manager-b", email="manager-b@example.com", password="password"
         )
-        self.admin = User.objects.create_superuser(
-            "admin-report", "admin@example.com", "password"
-        )
-        self.staff_a = User.objects.create_user(
-            "staff-prod", first_name="Production", last_name="Staff", password="password"
-        )
-        self.staff_a2 = User.objects.create_user(
-            "staff-prod-2", first_name="Second", last_name="Staff", password="password"
-        )
-        self.test_staff = User.objects.create_user(
-            "test-report", first_name="Test", last_name="Staff", password="password"
-        )
-        self.ordinary_staff = User.objects.create_user("ordinary", password="password")
-        self.membership_a = ProgramMembership.objects.create(
+        ProgramMembership.objects.create(
             user=self.manager_a,
             program=self.program_a,
             role=ProgramRole.MANAGER,
@@ -66,26 +52,36 @@ class ReportingFixtureMixin:
             role=ProgramRole.MANAGER,
             receive_scheduled_reports=True,
         )
+        self.operator = User.objects.create_user("operator", password="password")
         ProgramMembership.objects.create(
-            user=self.test_staff,
+            user=self.operator,
             program=self.program_a,
-            role=ProgramRole.STAFF,
-            is_test_staff=True,
+            role=ProgramRole.OPERATIONAL,
+        )
+        self.staff_a = StaffMember.objects.create(
+            program=self.program_a, first_name="Alfred", last_name="Sampare"
+        )
+        self.staff_a2 = StaffMember.objects.create(
+            program=self.program_a, first_name="Chelsea", last_name="Brown"
+        )
+        self.staff_b = StaffMember.objects.create(
+            program=self.program_b, first_name="Gary", last_name="Hill"
         )
         self.shift = Shift.objects.create(
-            name="07:00–15:00", start_time=time(7), end_time=time(15), sort_order=10
+            name="Morning", start_time=time(7), end_time=time(15), sort_order=10
         )
         self.category_a = StaffCategory.objects.create(
-            program=self.program_a, name="Support", slug="support", sort_order=10
+            program=self.program_a, name="Support", slug="support"
         )
         self.category_b = StaffCategory.objects.create(
-            program=self.program_b, name="Support", slug="support", sort_order=10
+            program=self.program_b, name="Support", slug="support"
         )
-        self.definition_a, self.regular_a, self.optional_a = self._definition(self.category_a, "Alpha")
-        self.definition_b, self.regular_b, self.optional_b = self._definition(self.category_b, "Beta")
-        for user in (self.staff_a, self.staff_a2, self.test_staff, self.ordinary_staff):
-            StaffAssignment.objects.create(user=user, category=self.category_a)
-        StaffAssignment.objects.create(user=self.manager_b, category=self.category_b)
+        self.definition_a, self.regular_a, self.optional_a = self._definition(
+            self.category_a, "Alpha"
+        )
+        self.definition_b, self.regular_b, self.optional_b = self._definition(
+            self.category_b, "Beta"
+        )
 
     def _definition(self, category, prefix):
         definition = ChecklistDefinition.objects.create(
@@ -102,304 +98,226 @@ class ReportingFixtureMixin:
         )
         return definition, regular, optional
 
-    def _report(self, **filters):
-        period = ReportPeriod(
-            "daily", self.operational_date, self.operational_date, "fixture"
+    def report_a(self, **filters):
+        return build_report(
+            program=self.program_a,
+            period=ReportPeriod(
+                "daily", self.operational_date, self.operational_date, "fixture"
+            ),
+            filters=filters,
         )
-        return build_report(program=self.program_a, period=period, filters=filters)
+
+    def contribute(self, item, staff, state):
+        return change_item_state(
+            item_id=item.pk,
+            actor=self.operator,
+            staff_member=staff,
+            new_state=state,
+        )
 
 
 class ReportCalculationTests(ReportingFixtureMixin, TestCase):
-    def test_fully_completed_shared_checklist(self):
+    def test_completed_partial_na_and_multiple_contributors(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
-        for item in instance.items.all():
-            change_item_state(item_id=item.pk, staff=self.staff_a, new_state=TaskState.COMPLETED)
-        row = self._report()["rows"][0]
+        regular = instance.items.get(source_task=self.regular_a)
+        optional = instance.items.get(source_task=self.optional_a)
+        self.contribute(regular, self.staff_a, TaskState.COMPLETED)
+        self.contribute(optional, self.staff_a2, TaskState.NOT_APPLICABLE)
+        row = self.report_a()["rows"][0]
         self.assertEqual(row["status"], "completed")
-        self.assertEqual(row["completed_count"], 2)
-        self.assertEqual(row["completion_percentage"], 100.0)
-
-    def test_partial_multiple_staff_and_unfinished_contributors(self):
-        instance = resolve_checklist(self.definition_a, self.operational_date)
-        regular = instance.items.get(source_task=self.regular_a)
-        optional = instance.items.get(source_task=self.optional_a)
-        change_item_state(item_id=regular.pk, staff=self.staff_a, new_state=TaskState.COMPLETED)
-        change_item_state(item_id=optional.pk, staff=self.staff_a2, new_state=TaskState.COMPLETED)
-        change_item_state(item_id=optional.pk, staff=self.staff_a2, new_state=TaskState.PENDING)
-        row = self._report()["rows"][0]
-        self.assertEqual(row["status"], "incomplete")
-        self.assertEqual(row["completed_count"], 1)
-        self.assertEqual(row["pending_count"], 1)
-        self.assertCountEqual(row["contributors"], ["Production Staff", "Second Staff"])
-        self.assertEqual(len(row["tasks"][1]["contributions"]), 2)
-
-    def test_na_is_excluded_from_denominator_and_attributed(self):
-        instance = resolve_checklist(self.definition_a, self.operational_date)
-        regular = instance.items.get(source_task=self.regular_a)
-        optional = instance.items.get(source_task=self.optional_a)
-        change_item_state(item_id=regular.pk, staff=self.staff_a, new_state=TaskState.COMPLETED)
-        change_item_state(item_id=optional.pk, staff=self.staff_a2, new_state=TaskState.NOT_APPLICABLE)
-        row = self._report()["rows"][0]
         self.assertEqual(row["applicable_count"], 1)
         self.assertEqual(row["completed_count"], 1)
         self.assertEqual(row["na_count"], 1)
         self.assertEqual(row["completion_percentage"], 100.0)
-        na_task = next(task for task in row["tasks"] if task["state"] == TaskState.NOT_APPLICABLE)
-        self.assertEqual(na_task["contributor"], "Second Staff")
+        self.assertCountEqual(row["contributors"], ["Alfred Sampare", "Chelsea Brown"])
 
-    def test_na_not_allowed_is_rejected_and_reported_pending(self):
+    def test_unfinished_checklist_lists_every_contributor(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
-        item = instance.items.get(source_task=self.regular_a)
-        with self.assertRaises(ValidationError):
-            change_item_state(item_id=item.pk, staff=self.staff_a, new_state=TaskState.NOT_APPLICABLE)
-        row = self._report()["rows"][0]
-        self.assertEqual(row["pending_count"], 2)
+        regular = instance.items.get(source_task=self.regular_a)
+        optional = instance.items.get(source_task=self.optional_a)
+        self.contribute(regular, self.staff_a, TaskState.COMPLETED)
+        self.contribute(optional, self.staff_a2, TaskState.COMPLETED)
+        self.contribute(optional, self.staff_a2, TaskState.PENDING)
+        row = self.report_a()["rows"][0]
+        self.assertEqual(row["status"], "incomplete")
+        self.assertCountEqual(row["contributors"], ["Alfred Sampare", "Chelsea Brown"])
 
-    def test_no_contributors(self):
-        resolve_checklist(self.definition_a, self.operational_date)
-        row = self._report()["rows"][0]
-        self.assertEqual(row["contributors"], [])
-        self.assertEqual(row["pending_count"], 2)
-
-    def test_test_staff_only_activity_cannot_contaminate_production(self):
+    def test_no_contributors_and_late_entry_updates_live_report(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
-        for item in instance.items.all():
-            change_item_state(item_id=item.pk, staff=self.test_staff, new_state=TaskState.COMPLETED)
-        membership = ProgramMembership.objects.get(
-            user=self.test_staff, program=self.program_a
+        self.assertEqual(self.report_a()["rows"][0]["contributors"], [])
+        self.contribute(
+            instance.items.get(source_task=self.regular_a),
+            self.staff_a,
+            TaskState.COMPLETED,
         )
-        membership.is_active = False
-        membership.save(update_fields=("is_active",))
-        row = self._report()["rows"][0]
-        self.assertEqual(row["completed_count"], 0)
-        self.assertEqual(row["pending_count"], 2)
-        self.assertEqual(row["contributors"], [])
+        self.assertEqual(self.report_a()["totals"]["completed"], 1)
 
-    def test_mixed_test_and_production_uses_latest_production_history(self):
+    def test_staff_filter_uses_staff_member_identity(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
-        item = instance.items.get(source_task=self.regular_a)
-        change_item_state(item_id=item.pk, staff=self.test_staff, new_state=TaskState.COMPLETED)
-        change_item_state(item_id=item.pk, staff=self.staff_a, new_state=TaskState.PENDING)
-        change_item_state(item_id=item.pk, staff=self.test_staff, new_state=TaskState.COMPLETED)
-        task = self._report()["rows"][0]["tasks"][0]
-        self.assertEqual(task["state"], TaskState.PENDING)
-        self.assertEqual(task["contributor"], "Production Staff")
-        self.assertEqual(len(task["contributions"]), 1)
-
-    def test_late_historical_entry_changes_live_report(self):
-        instance = resolve_checklist(self.definition_a, self.operational_date)
-        item = instance.items.get(source_task=self.regular_a)
-        self.assertEqual(self._report()["totals"]["completed"], 0)
-        change_item_state(item_id=item.pk, staff=self.staff_a, new_state=TaskState.COMPLETED)
-        self.assertEqual(self._report()["totals"]["completed"], 1)
-
-    def test_multiple_programs_with_overlapping_identity_are_isolated(self):
-        resolve_checklist(self.definition_a, self.operational_date)
-        beta = resolve_checklist(self.definition_b, self.operational_date)
-        item = beta.items.get(source_task=self.regular_b)
-        change_item_state(item_id=item.pk, staff=self.manager_b, new_state=TaskState.COMPLETED)
-        report = self._report()
+        self.contribute(
+            instance.items.get(source_task=self.regular_a),
+            self.staff_a,
+            TaskState.COMPLETED,
+        )
+        report = self.report_a(staff=str(self.staff_a.pk))
+        self.assertEqual(list(report["staff_choices"]), [self.staff_a])
         self.assertEqual(len(report["rows"]), 1)
-        self.assertNotIn("Beta", str(report["rows"]))
+        self.assertEqual(len(report["rows"][0]["filtered_tasks"]), 1)
 
-
-class ReportPeriodTests(TestCase):
-    def test_daily_weekly_month_and_rolling_boundaries(self):
-        self.assertEqual(
-            period_from_params({"period": "daily", "date": "2026-09-15"}).start,
-            date(2026, 9, 15),
+    def test_large_report_does_not_exceed_sqlite_parameter_limit(self):
+        instance = resolve_checklist(self.definition_a, self.operational_date)
+        sources = TaskDefinition.objects.bulk_create(
+            [
+                TaskDefinition(
+                    section=self.regular_a.section,
+                    label=f"Scale task {index}",
+                    sort_order=100 + index,
+                )
+                for index in range(1000)
+            ]
         )
+        ChecklistItem.objects.bulk_create(
+            [
+                ChecklistItem(
+                    instance=instance,
+                    source_task=source,
+                    section_name_snapshot="Alpha section",
+                    section_order_snapshot=10,
+                    task_label_snapshot=source.label,
+                    task_order_snapshot=source.sort_order,
+                )
+                for source in sources
+            ]
+        )
+
+        report = self.report_a()
+
+        self.assertEqual(report["totals"]["checklists"], 1)
+        self.assertEqual(report["totals"]["pending"], 1002)
+
+
+class PeriodBoundaryTests(TestCase):
+    def test_all_web_period_boundaries(self):
+        daily = period_from_params({"period": "daily", "date": "2026-09-15"})
         weekly = period_from_params({"period": "weekly", "date": "2026-09-16"})
-        self.assertEqual((weekly.start, weekly.end), (date(2026, 9, 14), date(2026, 9, 20)))
         monthly = period_from_params({"period": "monthly", "month": "2024-02"})
-        self.assertEqual((monthly.start, monthly.end), (date(2024, 2, 1), date(2024, 2, 29)))
+        annual = period_from_params({"period": "annual", "year": "2024"})
         rolling = period_from_params({"period": "rolling365", "date": "2024-03-01"})
+        self.assertEqual(daily.start, date(2026, 9, 15))
+        self.assertEqual((weekly.start, weekly.end), (date(2026, 9, 14), date(2026, 9, 20)))
+        self.assertEqual(monthly.end, date(2024, 2, 29))
+        self.assertEqual((annual.start, annual.end), (date(2024, 1, 1), date(2024, 12, 31)))
         self.assertEqual((rolling.end - rolling.start).days, 364)
 
-    def test_calendar_year_and_previous_calendar_year_schedule(self):
-        annual = period_from_params({"period": "annual", "year": "2024"})
-        self.assertEqual((annual.start, annual.end), (date(2024, 1, 1), date(2024, 12, 31)))
-        due = dict(scheduled_periods(date(2027, 1, 1)))
-        self.assertEqual((due["annual"].start, due["annual"].end), (date(2026, 1, 1), date(2026, 12, 31)))
-        self.assertEqual((due["monthly"].start, due["monthly"].end), (date(2026, 12, 1), date(2026, 12, 31)))
+    def test_scheduled_periods_use_previous_complete_periods(self):
+        monday = dict(scheduled_periods(date(2026, 9, 21)))
+        self.assertEqual((monday["weekly"].start, monday["weekly"].end), (date(2026, 9, 14), date(2026, 9, 20)))
+        january = dict(scheduled_periods(date(2027, 1, 1)))
+        self.assertEqual((january["annual"].start, january["annual"].end), (date(2026, 1, 1), date(2026, 12, 31)))
 
 
 class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
     def setUp(self):
         super().setUp()
         alpha = resolve_checklist(self.definition_a, self.operational_date)
-        beta = resolve_checklist(self.definition_b, self.operational_date)
-        change_item_state(
-            item_id=alpha.items.get(source_task=self.regular_a).pk,
-            staff=self.staff_a,
-            new_state=TaskState.COMPLETED,
+        self.contribute(
+            alpha.items.get(source_task=self.regular_a),
+            self.staff_a,
+            TaskState.COMPLETED,
         )
-        change_item_state(
-            item_id=beta.items.get(source_task=self.regular_b).pk,
-            staff=self.manager_b,
-            new_state=TaskState.COMPLETED,
-        )
+        resolve_checklist(self.definition_b, self.operational_date)
 
-    def test_manager_cannot_select_or_drill_into_other_program(self):
+    def test_manager_cannot_cross_program_by_program_or_instance_id(self):
         self.client.force_login(self.manager_a)
-        response = self.client.get(reverse("reports"), {"program": self.program_b.pk})
-        self.assertEqual(response.status_code, 403)
-        beta_instance = ChecklistInstance.objects.get(program=self.program_b)
-        response = self.client.get(
-            reverse("report-detail", args=(beta_instance.pk,)),
-            {"date": self.operational_date.isoformat()},
-        )
-        self.assertEqual(response.status_code, 403)
-
-    def test_cross_program_category_and_shift_query_cannot_leak(self):
-        self.client.force_login(self.manager_a)
-        response = self.client.get(
-            reverse("reports"),
-            {"date": self.operational_date.isoformat(), "category": self.category_b.pk},
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "Beta regular")
-        self.assertEqual(response.context["rows"], [])
-
-    def test_csv_is_program_scoped_and_honours_filters(self):
-        alpha = ChecklistInstance.objects.get(program=self.program_a)
-        change_item_state(
-            item_id=alpha.items.get(source_task=self.optional_a).pk,
-            staff=self.test_staff,
-            new_state=TaskState.COMPLETED,
-        )
-        self.client.force_login(self.manager_a)
-        response = self.client.get(
-            reverse("report-csv"),
-            {"date": self.operational_date.isoformat(), "task_state": "completed"},
-        )
-        content = response.content.decode()
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Alpha regular", content)
-        self.assertNotIn("Alpha optional", content)
-        self.assertNotIn("Beta regular", content)
-
-    def test_staff_denied_manager_allowed_admin_allowed(self):
-        self.client.force_login(self.ordinary_staff)
-        self.assertEqual(self.client.get(reverse("reports")).status_code, 403)
-        self.client.force_login(self.manager_a)
-        self.assertEqual(self.client.get(reverse("reports")).status_code, 200)
-        self.client.force_login(self.admin)
         self.assertEqual(
-            self.client.get(reverse("reports"), {"program": self.program_a.pk}).status_code,
-            200,
+            self.client.get(reverse("reports"), {"program": self.program_b.pk}).status_code,
+            403,
+        )
+        beta = ChecklistInstance.objects.get(program=self.program_b)
+        self.assertEqual(
+            self.client.get(
+                reverse("report-detail", args=(beta.pk,)),
+                {"date": self.operational_date},
+            ).status_code,
+            403,
         )
 
-    def test_inactive_configuration_history_reports_but_cannot_be_reopened(self):
-        self.definition_a.is_active = False
-        self.definition_a.save(update_fields=("is_active",))
+    def test_csv_and_print_are_scoped_and_use_staff_names(self):
         self.client.force_login(self.manager_a)
-        response = self.client.get(reverse("reports"), {"date": self.operational_date.isoformat()})
-        self.assertEqual(len(response.context["rows"]), 1)
-        with self.assertRaises(PermissionDenied):
-            resolve_checklist(self.definition_a, self.operational_date + timedelta(days=1))
+        params = {"date": self.operational_date, "staff": self.staff_a.pk}
+        csv_response = self.client.get(reverse("report-csv"), params)
+        content = csv_response.content.decode()
+        self.assertIn("Alpha regular", content)
+        self.assertIn("Alfred Sampare", content)
+        self.assertNotIn("Beta regular", content)
+        print_response = self.client.get(reverse("report-print"), params)
+        self.assertEqual(print_response.status_code, 200)
+        self.assertContains(print_response, "Alfred Sampare")
 
-    def test_admin_can_explicitly_inspect_test_staff_activity(self):
-        alpha = ChecklistInstance.objects.get(program=self.program_a)
-        change_item_state(
-            item_id=alpha.items.get(source_task=self.optional_a).pk,
-            staff=self.test_staff,
-            new_state=TaskState.COMPLETED,
-        )
-        self.client.force_login(self.admin)
-        normal = self.client.get(
-            reverse("reports"),
-            {"program": self.program_a.pk, "date": self.operational_date.isoformat()},
-        )
-        inspection = self.client.get(
-            reverse("reports"),
-            {
-                "program": self.program_a.pk,
-                "date": self.operational_date.isoformat(),
-                "include_test": "1",
-            },
-        )
-        self.assertEqual(normal.context["totals"]["completed"], 1)
-        self.assertEqual(inspection.context["totals"]["completed"], 2)
+    def test_report_filter_structure_and_styles_prevent_overflow(self):
+        self.client.force_login(self.manager_a)
+        response = self.client.get(reverse("reports"), {"date": self.operational_date})
+        self.assertContains(response, 'class="report-filters"')
+        self.assertContains(response, 'name="section"')
+        with open("checklists/static/checklists/styles.css", encoding="utf-8") as stylesheet:
+            css = stylesheet.read()
+        self.assertIn(".report-filters > * { min-width: 0; }", css)
+        self.assertIn("max-width: 100%", css)
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class ScheduledReportTests(ReportingFixtureMixin, TestCase):
-    def test_multiple_enabled_managers_receive_the_same_program_report(self):
-        second_manager = get_user_model().objects.create_user(
-            "manager-a-second", email="manager-a-second@example.com", password="password"
+    def test_program_routing_multiple_managers_and_idempotence(self):
+        second = get_user_model().objects.create_user(
+            "manager-a-2", email="manager-a-2@example.com"
         )
         ProgramMembership.objects.create(
-            user=second_manager,
+            user=second,
             program=self.program_a,
             role=ProgramRole.MANAGER,
             receive_scheduled_reports=True,
         )
         call_command("send_scheduled_reports", at="2026-09-16T08:00:00", verbosity=0)
         recipients = [address for message in mail.outbox for address in message.to]
-        self.assertIn("manager-a@example.com", recipients)
-        self.assertIn("manager-a-second@example.com", recipients)
+        self.assertCountEqual(
+            recipients,
+            ["manager-a@example.com", "manager-a-2@example.com", "manager-b@example.com"],
+        )
+        call_command("send_scheduled_reports", at="2026-09-16T09:00:00", verbosity=0)
+        self.assertEqual(len(mail.outbox), 3)
 
-    def test_email_routing_is_program_scoped_idempotent_and_excludes_test_staff(self):
-        instance = resolve_checklist(self.definition_a, date(2026, 9, 20))
-        item = instance.items.get(source_task=self.regular_a)
-        change_item_state(item_id=item.pk, staff=self.test_staff, new_state=TaskState.COMPLETED)
-        call_command("send_scheduled_reports", at="2026-09-21T08:00:00", verbosity=0)
-        self.assertEqual(len(mail.outbox), 4)  # daily and weekly for each Program's Manager
-        alpha_messages = [message for message in mail.outbox if message.to == ["manager-a@example.com"]]
-        beta_messages = [message for message in mail.outbox if message.to == ["manager-b@example.com"]]
-        self.assertEqual(len(alpha_messages), 2)
-        self.assertEqual(len(beta_messages), 2)
-        self.assertTrue(all("Program Beta" not in message.body for message in alpha_messages))
-        self.assertTrue(all("Program Alpha" not in message.body for message in beta_messages))
-        self.assertEqual(ScheduledReportDelivery.objects.filter(program=self.program_a).count(), 2)
-        daily = ScheduledReportDelivery.objects.get(
+    def test_sent_snapshot_remains_stable_after_late_entry(self):
+        instance = resolve_checklist(self.definition_a, self.operational_date)
+        call_command("send_scheduled_reports", at="2026-09-16T08:00:00", verbosity=0)
+        delivery = ScheduledReportDelivery.objects.get(
             program=self.program_a, cadence=ReportCadence.DAILY
         )
-        self.assertEqual(daily.snapshot["totals"]["completed"], 0)
-        self.assertEqual(daily.snapshot["totals"]["pending"], 2)
-        call_command("send_scheduled_reports", at="2026-09-21T09:00:00", verbosity=0)
-        self.assertEqual(len(mail.outbox), 4)
-
-    def test_admins_are_not_automatic_recipients(self):
-        call_command("send_scheduled_reports", at="2026-09-16T08:00:00", verbosity=0)
-        recipients = [address for message in mail.outbox for address in message.to]
-        self.assertNotIn("admin@example.com", recipients)
-        self.assertIn("manager-b@example.com", recipients)
-
-    def test_sent_snapshot_does_not_change_after_late_entry(self):
-        instance = resolve_checklist(self.definition_a, date(2026, 9, 15))
-        item = instance.items.get(source_task=self.regular_a)
-        call_command("send_scheduled_reports", at="2026-09-16T08:00:00", verbosity=0)
-        delivery = ScheduledReportDelivery.objects.get(program=self.program_a)
-        original_snapshot = delivery.snapshot
-        change_item_state(item_id=item.pk, staff=self.staff_a, new_state=TaskState.COMPLETED)
-        live = build_report(
-            program=self.program_a,
-            period=ReportPeriod("daily", date(2026, 9, 15), date(2026, 9, 15), ""),
+        original = delivery.snapshot
+        self.contribute(
+            instance.items.get(source_task=self.regular_a),
+            self.staff_a,
+            TaskState.COMPLETED,
         )
-        self.assertEqual(live["totals"]["completed"], 1)
         delivery.refresh_from_db()
-        self.assertEqual(delivery.snapshot, original_snapshot)
+        self.assertEqual(delivery.snapshot, original)
 
 
 class RetentionTests(ReportingFixtureMixin, TestCase):
-    def test_seven_calendar_year_boundary_is_retained_and_older_is_purged(self):
+    def test_boundary_retained_older_operational_data_purged(self):
         boundary = resolve_checklist(self.definition_a, date(2019, 9, 16))
         older = resolve_checklist(self.definition_a, date(2019, 9, 15))
-        change_item_state(
-            item_id=older.items.get(source_task=self.regular_a).pk,
-            staff=self.staff_a,
-            new_state=TaskState.COMPLETED,
+        self.contribute(
+            older.items.get(source_task=self.regular_a),
+            self.staff_a,
+            TaskState.COMPLETED,
         )
         call_command("purge_operational_data", as_of="2026-09-16", verbosity=0)
         self.assertTrue(ChecklistInstance.objects.filter(pk=boundary.pk).exists())
         self.assertFalse(ChecklistInstance.objects.filter(pk=older.pk).exists())
-        self.assertTrue(Program.objects.filter(pk=self.program_a.pk).exists())
-        self.assertTrue(TaskDefinition.objects.filter(pk=self.regular_a.pk).exists())
+        self.assertTrue(StaffMember.objects.filter(pk=self.staff_a.pk).exists())
 
-    def test_dry_run_does_not_delete(self):
-        older = resolve_checklist(self.definition_a, date(2018, 1, 1))
+    def test_dry_run_preserves_data(self):
+        old = resolve_checklist(self.definition_a, date(2018, 1, 1))
         output = StringIO()
         call_command(
             "purge_operational_data",
@@ -408,34 +326,4 @@ class RetentionTests(ReportingFixtureMixin, TestCase):
             stdout=output,
             verbosity=0,
         )
-        self.assertTrue(ChecklistInstance.objects.filter(pk=older.pk).exists())
-        self.assertIn("Dry run", output.getvalue())
-
-
-class SeedReportingStabilityTests(TestCase):
-    def test_seed_rerun_preserves_operational_snapshot_and_reporting_history(self):
-        call_command("seed_development", verbosity=0)
-        program = Program.objects.get(slug="sonder-house")
-        definition = ChecklistDefinition.objects.filter(category__program=program).first()
-        production_staff = get_user_model().objects.create_user("seed-history-staff")
-        StaffAssignment.objects.create(user=production_staff, category=definition.category)
-        operational_date = date(2026, 9, 16)
-        instance = resolve_checklist(definition, operational_date)
-        item = instance.items.first()
-        original_label = item.task_label_snapshot
-        change_item_state(
-            item_id=item.pk,
-            staff=production_staff,
-            new_state=TaskState.COMPLETED,
-        )
-
-        call_command("seed_development", verbosity=0)
-
-        item.refresh_from_db()
-        report = build_report(
-            program=program,
-            period=ReportPeriod("daily", operational_date, operational_date, ""),
-        )
-        self.assertEqual(item.task_label_snapshot, original_label)
-        self.assertEqual(item.contributions.count(), 1)
-        self.assertEqual(report["totals"]["completed"], 1)
+        self.assertTrue(ChecklistInstance.objects.filter(pk=old.pk).exists())

@@ -402,11 +402,21 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.assertLess(primary.index("Completion"), primary.index("Section"))
         self.assertLess(secondary.index("Position"), secondary.index("Shift"))
         self.assertLess(secondary.index("Shift"), secondary.index("Staff"))
-        self.assertLess(secondary.index("Staff"), secondary.index("Apply filters"))
-        self.assertLess(secondary.index("Apply filters"), secondary.index("Reset"))
+        self.assertLess(secondary.index("Staff"), secondary.index("Apply Filters"))
+        self.assertLess(secondary.index("Apply Filters"), secondary.index("Reset Filters"))
         self.assertContains(response, "<h1>Chore Reports</h1>", html=True)
         self.assertContains(response, '<option value="">All shifts</option>', html=True)
         self.assertNotContains(response, "All valid shifts")
+        self.assertContains(response, '<option value="">All</option>', html=True)
+        self.assertNotContains(response, "All sections")
+        self.assertContains(response, ">Apply Filters</button>")
+        self.assertContains(response, ">Reset Filters</a>")
+        self.assertContains(response, '<th class="report-date">Date</th>', html=True)
+        self.assertContains(
+            response,
+            f'<td class="report-date">{self.operational_date.isoformat()}</td>',
+            html=True,
+        )
         self.assertContains(response, 'name="section"')
         for label in ("Period", "Date", "Position", "Shift", "Staff", "Completion", "Section"):
             self.assertContains(response, f"<label>{label}", html=False)
@@ -436,9 +446,11 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         with open("checklists/static/checklists/styles.css", encoding="utf-8") as stylesheet:
             css = stylesheet.read()
         self.assertIn(".report-filter-row-primary { grid-template-columns: repeat(4, minmax(0, 1fr)); }", css)
-        self.assertIn(".report-filter-row-secondary { grid-template-columns: repeat(3, minmax(0, 1fr)) auto;", css)
+        self.assertIn(".report-filter-row-secondary { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(12.5rem, 1fr);", css)
+        self.assertIn(".filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));", css)
         self.assertIn(".report-filters > *, .report-filter-row > * { min-width: 0; }", css)
         self.assertIn(".report-filter-row-primary, .report-filter-row-secondary { grid-template-columns: 1fr; }", css)
+        self.assertIn(".report-table .report-date { min-width: 7.25rem; white-space: nowrap; }", css)
         self.assertIn("max-width: 100%", css)
 
     def test_full_year_mock_history_remains_reportable_to_manager_and_admin(self):

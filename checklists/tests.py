@@ -536,7 +536,8 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
     def test_user_facing_navigation_uses_chore_list_while_domain_names_remain_stable(self):
         self.client.force_login(self.operator)
         response = self.client.get(reverse("dashboard"))
-        self.assertContains(response, ">Chore Lists</a>")
+        self.assertContains(response, ">Chores</a>")
+        self.assertNotContains(response, ">Chore Lists</a>")
         self.assertNotContains(response, ">Checklists</a>")
         self.assertEqual(ChecklistDefinition.__name__, "ChecklistDefinition")
         self.assertEqual(ChecklistInstance.__name__, "ChecklistInstance")
@@ -665,6 +666,7 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertEqual(self.client.get(reverse("dashboard")).status_code, 403)
         report = self.client.get(reverse("reports"))
         self.assertNotContains(report, ">Checklists</a>")
+        self.assertNotContains(report, ">Chores</a>")
 
         self.client.force_login(self.operator)
         self.assertRedirects(self.client.get(reverse("home")), reverse("dashboard"))

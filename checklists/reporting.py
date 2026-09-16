@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 from django.db.models import Subquery
 
+from .presentation import display_task_text
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
@@ -25,6 +26,7 @@ class ReportPeriod:
     start: date
     end: date
     label: str
+    selected_date: date | None = None
 
 
 def period_from_params(params, today=None):
@@ -32,32 +34,53 @@ def period_from_params(params, today=None):
     kind = params.get("period", "daily")
     if kind == "daily":
         selected = _date(params.get("date"), today)
-        return ReportPeriod(kind, selected, selected, f"{selected:%B} {selected.day}, {selected.year}")
+        return ReportPeriod(
+            kind,
+            selected,
+            selected,
+            f"{selected:%B} {selected.day}, {selected.year}",
+            selected,
+        )
     if kind == "weekly":
         selected = _date(params.get("date"), today)
         start = selected - timedelta(days=selected.weekday())
         end = start + timedelta(days=6)
-        return ReportPeriod(kind, start, end, f"{start:%b %d} – {end:%b %d, %Y}")
+        return ReportPeriod(
+            kind,
+            start,
+            end,
+            f"{start:%b %d} – {end:%b %d, %Y}",
+            selected,
+        )
     if kind == "monthly":
-        raw = params.get("month", today.strftime("%Y-%m"))
-        try:
-            year, month = (int(value) for value in raw.split("-", 1))
-            start = date(year, month, 1)
-        except (TypeError, ValueError):
-            start = today.replace(day=1)
+        selected = _date(params.get("date"), None) or _legacy_month_date(
+            params.get("month"), today
+        )
+        start = selected.replace(day=1)
         end = start.replace(day=monthrange(start.year, start.month)[1])
-        return ReportPeriod(kind, start, end, start.strftime("%B %Y"))
+        return ReportPeriod(kind, start, end, start.strftime("%B %Y"), selected)
     if kind == "annual":
-        try:
-            year = int(params.get("year", today.year))
-            start = date(year, 1, 1)
-        except (TypeError, ValueError):
-            start = date(today.year, 1, 1)
-        return ReportPeriod(kind, start, date(start.year, 12, 31), str(start.year))
+        selected = _date(params.get("date"), None) or _legacy_year_date(
+            params.get("year"), today
+        )
+        start = date(selected.year, 1, 1)
+        return ReportPeriod(
+            kind,
+            start,
+            date(start.year, 12, 31),
+            str(start.year),
+            selected,
+        )
     if kind == "rolling365":
         end = _date(params.get("date"), today)
         start = end - timedelta(days=364)
-        return ReportPeriod(kind, start, end, f"{start:%b %d, %Y} – {end:%b %d, %Y}")
+        return ReportPeriod(
+            kind,
+            start,
+            end,
+            f"{start:%b %d, %Y} – {end:%b %d, %Y}",
+            end,
+        )
     return period_from_params({"period": "daily", "date": today.isoformat()}, today)
 
 
@@ -170,7 +193,7 @@ def build_report(*, program, period, filters=None):
                 {
                     "id": item.pk,
                     "section": item.section_name_snapshot,
-                    "label": item.task_label_snapshot,
+                    "label": display_task_text(item.task_label_snapshot),
                     "state": effective_state,
                     "state_label": dict(TaskState.choices)[effective_state],
                     "allow_na": item.allow_na_snapshot,
@@ -237,9 +260,36 @@ def build_report(*, program, period, filters=None):
         else (100.0 if totals["checklists"] else 0.0)
     )
     category_choices = StaffCategory.objects.filter(program=program).order_by("sort_order", "name")
-    shift_choices = Shift.objects.filter(checklist_definitions__category__program=program)
+    shift_choices = Shift.objects.filter(
+        is_active=True,
+        checklist_definitions__is_active=True,
+        checklist_definitions__category__program=program,
+        checklist_definitions__category__is_active=True,
+    )
     if category_id:
         shift_choices = shift_choices.filter(checklist_definitions__category_id=category_id)
+    shift_options_by_position = {"": []}
+    seen_all_shifts = set()
+    valid_definitions = (
+        ChecklistDefinition.objects.filter(
+            is_active=True,
+            category__program=program,
+            category__is_active=True,
+            shift__is_active=True,
+        )
+        .select_related("shift")
+        .order_by("shift__sort_order", "shift__name", "shift_id")
+    )
+    for definition in valid_definitions:
+        option = {"id": definition.shift_id, "name": definition.shift.name}
+        position_options = shift_options_by_position.setdefault(
+            str(definition.category_id), []
+        )
+        if not any(existing["id"] == definition.shift_id for existing in position_options):
+            position_options.append(option)
+        if definition.shift_id not in seen_all_shifts:
+            shift_options_by_position[""].append(option)
+            seen_all_shifts.add(definition.shift_id)
     staff_choices = StaffMember.objects.filter(
         program=program,
         staff_contributions__item__instance__program=program,
@@ -259,6 +309,7 @@ def build_report(*, program, period, filters=None):
         "filters": filters,
         "category_choices": category_choices,
         "shift_choices": shift_choices.distinct().order_by("sort_order", "name"),
+        "shift_options_by_position": shift_options_by_position,
         "staff_choices": staff_choices,
         "section_choices": sections,
     }
@@ -300,6 +351,21 @@ def report_snapshot(report):
 def _date(raw, fallback):
     try:
         return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _legacy_month_date(raw, fallback):
+    try:
+        year, month = (int(value) for value in raw.split("-", 1))
+        return date(year, month, 1)
+    except (AttributeError, TypeError, ValueError):
+        return fallback
+
+
+def _legacy_year_date(raw, fallback):
+    try:
+        return date(int(raw), 1, 1)
     except (TypeError, ValueError):
         return fallback
 

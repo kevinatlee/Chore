@@ -253,14 +253,21 @@ class PeriodBoundaryTests(TestCase):
     def test_all_web_period_boundaries(self):
         daily = period_from_params({"period": "daily", "date": "2026-09-15"})
         weekly = period_from_params({"period": "weekly", "date": "2026-09-16"})
-        monthly = period_from_params({"period": "monthly", "month": "2024-02"})
-        annual = period_from_params({"period": "annual", "year": "2024"})
+        monthly = period_from_params({"period": "monthly", "date": "2024-02-17"})
+        annual = period_from_params({"period": "annual", "date": "2024-06-12"})
         rolling = period_from_params({"period": "rolling365", "date": "2024-03-01"})
         self.assertEqual((daily.start, daily.end), (date(2026, 9, 15), date(2026, 9, 15)))
         self.assertEqual((weekly.start, weekly.end), (date(2026, 9, 14), date(2026, 9, 20)))
         self.assertEqual((monthly.start, monthly.end), (date(2024, 2, 1), date(2024, 2, 29)))
         self.assertEqual((annual.start, annual.end), (date(2024, 1, 1), date(2024, 12, 31)))
         self.assertEqual((rolling.start, rolling.end), (date(2023, 3, 3), date(2024, 3, 1)))
+        self.assertEqual(monthly.selected_date, date(2024, 2, 17))
+        self.assertEqual(annual.selected_date, date(2024, 6, 12))
+
+        legacy_month = period_from_params({"period": "monthly", "month": "2025-04"})
+        legacy_year = period_from_params({"period": "annual", "year": "2025"})
+        self.assertEqual((legacy_month.start, legacy_month.end), (date(2025, 4, 1), date(2025, 4, 30)))
+        self.assertEqual((legacy_year.start, legacy_year.end), (date(2025, 1, 1), date(2025, 12, 31)))
 
     def test_scheduled_periods_use_previous_complete_periods(self):
         monday = dict(scheduled_periods(date(2026, 9, 21)))
@@ -360,13 +367,58 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.assertEqual(print_response.status_code, 200)
         self.assertContains(print_response, "Alfred Sampare")
 
+    def test_task_display_is_consistent_in_report_print_and_csv(self):
+        alpha = ChecklistInstance.objects.get(program=self.program_a)
+        item = alpha.items.get(source_task=self.regular_a)
+        stored_snapshot = "Disinfect Phone/Door Handles; Check WISH/ComVida and DNA"
+        item.task_label_snapshot = stored_snapshot
+        item.save(update_fields=("task_label_snapshot",))
+        self.client.force_login(self.manager_a)
+        params = {"date": self.operational_date}
+
+        detail = self.client.get(reverse("report-detail", args=(alpha.pk,)), params)
+        printed = self.client.get(reverse("report-print"), params)
+        csv_content = self.client.get(reverse("report-csv"), params).content.decode()
+        expected = "Disinfect phone / door handles; check WISH / ComVida and DNA"
+        self.assertContains(detail, expected)
+        self.assertContains(printed, expected)
+        self.assertIn(expected, csv_content)
+        item.refresh_from_db()
+        self.assertEqual(item.task_label_snapshot, stored_snapshot)
+
     def test_report_filter_structure_and_styles_prevent_overflow(self):
         self.client.force_login(self.manager_a)
         response = self.client.get(reverse("reports"), {"date": self.operational_date})
         self.assertContains(response, 'class="report-filters"')
         self.assertContains(response, 'name="section"')
+        for label in ("Period", "Date", "Position", "Shift", "Staff", "Completion", "Section"):
+            self.assertContains(response, f"<label>{label}", html=False)
+        self.assertNotContains(response, 'name="month"')
+        self.assertNotContains(response, 'name="year"')
+        self.assertNotContains(response, 'name="task_state"')
+        self.assertNotContains(response, "Staff category")
+        self.assertNotContains(response, "Staff contribution")
+        self.assertNotContains(response, "Checklist state")
+        self.assertContains(response, "report-position-shift-options")
+        self.assertContains(response, 'position.addEventListener("change"')
+        self.assertEqual(
+            response.context["shift_options_by_position"][str(self.category_a.pk)],
+            [{"id": self.shift.pk, "name": "Morning"}],
+        )
+        monthly = self.client.get(
+            reverse("reports"),
+            {"period": "monthly", "date": "2024-02-17"},
+        )
+        self.assertContains(monthly, 'name="date" value="2024-02-17"')
+        legacy = self.client.get(
+            reverse("reports"),
+            {"period": "monthly", "month": "2024-02"},
+        )
+        self.assertContains(legacy, 'name="date" value="2024-02-01"')
+        self.assertNotContains(legacy, "month=2024-02")
         with open("checklists/static/checklists/styles.css", encoding="utf-8") as stylesheet:
             css = stylesheet.read()
+        self.assertIn("minmax(min(12rem, 100%), 1fr)", css)
         self.assertIn(".report-filters > * { min-width: 0; }", css)
         self.assertIn("max-width: 100%", css)
 

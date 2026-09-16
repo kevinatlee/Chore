@@ -2,7 +2,7 @@
 
 Chore is a shared operational checklist application for Sonder House. It separates authenticated application accounts from the operational staff roster, provides lazily created shared checklists, records per-task Pending/Completed/N/A state and Staff Contribution history, and supplies Program-scoped operational reporting.
 
-The important identity rule is enforced in the database: one operational checklist exists for each Program, date, staff category, and shift. Selecting another staff name changes attribution, never checklist identity.
+The important identity rule is enforced in the database: one operational checklist exists for each Program, date, position, and shift. Selecting another staff name changes attribution, never checklist identity.
 
 ## Technology
 
@@ -32,7 +32,7 @@ Open `http://127.0.0.1:8000/` for Chore and `http://127.0.0.1:8000/admin/` for c
 
 - `sonderhouse`, displayed as **Sonder House Operations**, with operational-entry access
 
-Passwords are never stored in the repository. The seed reads `CHORE_OPERATIONAL_PASSWORD`; if absent when the account is first created, the account receives an unusable password. Set the variable and rerun with `--reset-passwords` to enable sign-in. Administrators and Managers remain separately authenticated accounts configured through Django authentication and Program memberships.
+Passwords are never stored in the repository. The seed reads `CHORE_OPERATIONAL_PASSWORD`; if absent when the account is first created, the account receives an unusable password. Set the variable and rerun with `--reset-passwords` to enable sign-in. The active shared operational account is exempt from Django's composition, similarity, common-password, and minimum-length checks so its password can be communicated to the team; it is still hashed and authenticated normally. Administrators, Managers, staff/admin users, and accounts with Manager access retain the normal validators.
 
 The development seed is repeatable. Seed-managed staff, shifts, definitions, sections, and tasks have immutable seed keys, so rerunning restores the canonical configuration instead of creating replacements. The command does not create or modify personal Administrator/Manager accounts.
 
@@ -49,7 +49,7 @@ For a shift that crosses midnight, the operational date is the date on which the
 
 ## Domain design
 
-Authentication answers who may enter Chore. `ProgramMembership` grants either operational-entry or Manager reporting access. `StaffMember` is a separate Program-owned operational roster record with no username, password, or permanent category assignment. Staff select their name for each checklist session; inactive roster records disappear from new-work selection while historical attribution remains.
+Authentication answers who may enter Chore. `ProgramMembership` grants either operational-entry or Manager reporting access. `StaffMember` is a separate Program-owned operational roster record with no username, password, or permanent position assignment. Staff select their name for each checklist session; inactive roster records disappear from new-work selection while historical attribution remains.
 
 The first request for a valid date/category/shift lazily creates a `ChecklistInstance`. Its database uniqueness constraint prevents duplicates. SQLite atomic writes begin in `IMMEDIATE` mode and retry transient lock errors within a small bound, so concurrent creation and state changes serialize safely in the Phase 1 deployment. In the same transaction, `ChecklistItem` rows snapshot the category, shift, section, task label, ordering, N/A permission, weekday, and schedule times. Later configuration edits therefore do not rewrite historical operational meaning. A definition's category and shift become immutable after its first operational checklist, and each instance validates that its definition/category/shift identity agrees.
 
@@ -73,7 +73,7 @@ git diff --check main..HEAD
 
 Phase 2 adds Program-scoped Manager reporting without changing shared-checklist ownership. Configure Manager `ProgramMembership` records in Django admin; a Manager can report only on authorized Programs and receives scheduled email only when **Receive scheduled reports** is enabled. Report Staff filters and attribution use operational `StaffMember` records.
 
-The report UI is available at `/reports/` and supports daily, Monday–Sunday weekly, calendar-month, calendar-year, and rolling-365-day periods. It includes category, valid-shift, contribution, checklist-state, task-state, and section filtering, plus CSV and print/browser-PDF output. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
+The report UI is available at `/reports/` and uses one Date control for daily, Monday–Sunday weekly, containing-month, containing-calendar-year, and rolling-365-day periods. It includes Position, valid Shift, Staff, Completion, and Section filtering, plus CSV and print/browser-PDF output. Task wording is normalized at display time, preserving stored configuration and historical snapshots. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
 
 Generate deterministic development reporting history with the real roster, without creating authentication accounts:
 

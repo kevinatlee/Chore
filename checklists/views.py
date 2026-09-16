@@ -85,6 +85,32 @@ def dashboard(request):
         selected_category_id = categories[0].pk if categories else None
     if selected_category_id not in seen_categories:
         selected_category_id = categories[0].pk if categories else None
+    staff_members = StaffMember.objects.filter(program=program, is_active=True)
+    try:
+        requested_staff_id = int(request.GET.get("staff", ""))
+    except ValueError:
+        requested_staff_id = None
+    selected_staff_id = (
+        requested_staff_id
+        if requested_staff_id and staff_members.filter(pk=requested_staff_id).exists()
+        else None
+    )
+    selected_definitions = definitions.filter(category_id=selected_category_id)
+    shift_options_by_category = {}
+    for definition in definitions:
+        shift_options_by_category.setdefault(str(definition.category_id), []).append(
+            {"id": definition.shift_id, "name": definition.shift.name}
+        )
+    valid_shift_ids = list(selected_definitions.values_list("shift_id", flat=True))
+    try:
+        requested_shift_id = int(request.GET.get("shift", ""))
+    except ValueError:
+        requested_shift_id = None
+    selected_shift_id = (
+        requested_shift_id
+        if requested_shift_id in valid_shift_ids
+        else next(iter(valid_shift_ids), None)
+    )
     return render(
         request,
         "checklists/dashboard.html",
@@ -92,13 +118,14 @@ def dashboard(request):
             "available_programs": available_programs,
             "program": program,
             "operational_date": operational_date,
-            "staff_members": StaffMember.objects.filter(program=program, is_active=True),
+            "staff_members": staff_members,
+            "selected_staff_id": selected_staff_id,
             "categories": categories,
             "definitions": definitions,
-            "selected_definitions": definitions.filter(
-                category_id=selected_category_id
-            ),
+            "selected_definitions": selected_definitions,
+            "shift_options_by_category": shift_options_by_category,
             "selected_category_id": selected_category_id,
+            "selected_shift_id": selected_shift_id,
         },
     )
 
@@ -233,7 +260,12 @@ def _report_for_request(request):
         filters=request.GET,
     )
     report["available_programs"] = programs_for_reporting(request.user)
-    report["query_string"] = request.GET.urlencode()
+    query_params = request.GET.copy()
+    query_params["period"] = period.kind
+    query_params["date"] = period.selected_date.isoformat()
+    query_params.pop("month", None)
+    query_params.pop("year", None)
+    report["query_string"] = query_params.urlencode()
     return report
 
 
@@ -266,9 +298,9 @@ def report_csv(request):
     writer.writerow(
         [
             "Operational date",
-            "Staff category",
+            "Position",
             "Shift",
-            "Checklist state",
+            "Completion",
             "Applicable tasks",
             "Completed tasks",
             "N/A tasks",

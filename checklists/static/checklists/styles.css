@@ -79,7 +79,7 @@ select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #aab6bd; 
 .status-na { color: var(--na); background: var(--na-light); }
 .status-incomplete, .status-pending { color: var(--danger); background: #fde8e8; }
 .report-actions, .filter-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
-.report-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 1rem; margin-bottom: 1.5rem; padding: 1.2rem; background: white; border: 1px solid var(--line); border-radius: .8rem; }
+.report-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr)); gap: 1rem; width: 100%; max-width: 100%; margin-bottom: 1.5rem; padding: 1.2rem; overflow: hidden; background: white; border: 1px solid var(--line); border-radius: .8rem; }
 .report-filters > * { min-width: 0; }
 .report-filters label { display: grid; min-width: 0; align-content: start; gap: .35rem; font-size: .82rem; font-weight: 750; }
 .report-filters input, .report-filters select { width: 100%; min-width: 0; max-width: 100%; }

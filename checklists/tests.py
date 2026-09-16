@@ -5,7 +5,9 @@ from io import StringIO
 from threading import Barrier
 from unittest.mock import call, patch
 
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.forms import AdminPasswordChangeForm
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, OperationalError, close_old_connections, models, transaction
@@ -27,6 +29,7 @@ from .models import (
     TaskState,
 )
 from .seed_data import DEFINITIONS, LIFE_SKILLS_SLOTS, STAFF_ROSTER
+from .presentation import display_task_text
 from .services import (
     SQLITE_LOCK_ATTEMPTS,
     SQLITE_LOCK_BACKOFF_SECONDS,
@@ -82,6 +85,64 @@ class OperationalFixtureMixin:
         self.optional = TaskDefinition.objects.create(
             section=self.section, label="Optional task", sort_order=20, allow_na=True
         )
+
+
+class TaskPresentationTests(SimpleTestCase):
+    def test_sentence_case_slash_spacing_and_protected_terms(self):
+        self.assertEqual(display_task_text("Sweep/Mop Hallways"), "Sweep / mop hallways")
+        self.assertEqual(
+            display_task_text("Disinfect Phone/Door Handles"),
+            "Disinfect phone / door handles",
+        )
+        self.assertEqual(
+            display_task_text("Keep work area clean/organized/dusted; N/A if closed"),
+            "Keep work area clean / organized / dusted; N/A if closed",
+        )
+        self.assertEqual(
+            display_task_text("Check wish/ComVida, dna, hr, Facebook"),
+            "Check WISH / ComVida, DNA, HR, Facebook",
+        )
+        self.assertEqual(
+            display_task_text("Review https://example.test/a/b and /var/log/chore"),
+            "Review https://example.test/a/b and /var/log/chore",
+        )
+
+
+class PasswordPolicyTests(OperationalFixtureMixin, TestCase):
+    simple_password = "123"
+
+    def test_only_shared_operational_account_receives_password_exception(self):
+        validate_password(self.simple_password, self.operator)
+        for user in (self.manager, self.admin):
+            with self.subTest(user=user.username):
+                with self.assertRaises(ValidationError):
+                    validate_password(self.simple_password, user)
+
+        operational_form = AdminPasswordChangeForm(
+            self.operator,
+            data={"password1": self.simple_password, "password2": self.simple_password},
+        )
+        self.assertTrue(operational_form.is_valid(), operational_form.errors)
+        operational_form.save()
+        self.operator.refresh_from_db()
+        self.assertNotEqual(self.operator.password, self.simple_password)
+        self.assertTrue(self.operator.check_password(self.simple_password))
+        self.assertIsNotNone(
+            authenticate(username=self.operator.username, password=self.simple_password)
+        )
+        self.assertIsNone(authenticate(username=self.operator.username, password="wrong"))
+
+        for user in (self.manager, self.admin):
+            with self.subTest(admin_form=user.username):
+                form = AdminPasswordChangeForm(
+                    user,
+                    data={
+                        "password1": self.simple_password,
+                        "password2": self.simple_password,
+                    },
+                )
+                self.assertFalse(form.is_valid())
+                self.assertIn("password2", form.errors)
 
 
 class SharedChecklistDomainTests(OperationalFixtureMixin, TestCase):
@@ -189,6 +250,41 @@ class SharedChecklistDomainTests(OperationalFixtureMixin, TestCase):
         self.assertEqual(item.task_order_snapshot, 10)
         self.assertEqual(item.scheduled_start_snapshot, time(8))
         self.assertEqual(item.scheduled_end_snapshot, time(9))
+
+    def test_task_display_is_normalized_without_rewriting_history_or_attribution(self):
+        source_label = "Sweep/Mop Hallways; Check WISH/ComVida, DNA, HR, Facebook"
+        self.regular.label = source_label
+        self.regular.save(update_fields=("label",))
+        self.client.force_login(self.admin)
+        admin_response = self.client.get(reverse("admin:checklists_taskdefinition_changelist"))
+        self.assertContains(
+            admin_response,
+            "Sweep / mop hallways; check WISH / ComVida, DNA, HR, Facebook",
+        )
+        instance = resolve_checklist(self.definition, self.operational_date)
+        item = instance.items.get(source_task=self.regular)
+        change_item_state(
+            item_id=item.pk,
+            actor=self.operator,
+            staff_member=self.staff_a,
+            new_state=TaskState.COMPLETED,
+        )
+        self.regular.label = "Later configuration wording"
+        self.regular.save(update_fields=("label",))
+
+        item.refresh_from_db()
+        self.assertEqual(item.task_label_snapshot, source_label)
+        self.assertEqual(item.current_staff, self.staff_a)
+        self.client.force_login(self.operator)
+        response = self.client.get(
+            reverse("checklist-detail", args=(self.definition.pk,)),
+            {"date": self.operational_date, "staff": self.staff_a.pk},
+        )
+        self.assertContains(
+            response,
+            "Sweep / mop hallways; check WISH / ComVida, DNA, HR, Facebook",
+        )
+        self.assertNotContains(response, "Later configuration wording")
 
     def test_definition_identity_uniqueness_and_ordered_history_invariants(self):
         instance = resolve_checklist(self.definition, self.operational_date)
@@ -423,8 +519,71 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertContains(response, 'name="staff"')
         self.assertContains(response, "Alfred Sampare")
         self.assertContains(response, 'name="category"')
+        self.assertContains(response, "Position")
+        self.assertNotContains(response, "Staff category")
         self.assertContains(response, 'name="shift"')
         self.assertNotContains(response, "definition-card")
+
+    def test_staff_and_date_survive_position_and_shift_selection(self):
+        evening = Shift.objects.create(
+            name="Evening", start_time=time(15), end_time=time(23), sort_order=20
+        )
+        ChecklistDefinition.objects.create(
+            name="Support Evening Checklist",
+            category=self.category,
+            shift=evening,
+            sort_order=20,
+        )
+        other_category = StaffCategory.objects.create(
+            program=self.program, name="Front Desk", slug="front-desk", sort_order=20
+        )
+        ChecklistDefinition.objects.create(
+            name="Front Desk Morning Checklist",
+            category=other_category,
+            shift=self.shift,
+            sort_order=10,
+        )
+        self.client.force_login(self.operator)
+        params = {
+            "date": "2026-09-15",
+            "staff": self.staff_b.pk,
+            "category": self.category.pk,
+            "shift": evening.pk,
+        }
+        response = self.client.get(reverse("dashboard"), params)
+        self.assertEqual(response.context["selected_staff_id"], self.staff_b.pk)
+        self.assertEqual(response.context["selected_shift_id"], evening.pk)
+        self.assertEqual(response.context["operational_date"], date(2026, 9, 15))
+        self.assertContains(
+            response,
+            f'<option value="{self.staff_b.pk}" selected>Chelsea Brown</option>',
+            html=True,
+        )
+        self.assertContains(response, "position.addEventListener")
+        self.assertContains(response, "shift.replaceChildren")
+        self.assertNotContains(response, "window.location='/checklists/?category=")
+        self.assertEqual(
+            list(response.context["selected_definitions"].values_list("shift__name", flat=True)),
+            ["Morning", "Evening"],
+        )
+
+        params["shift"] = self.shift.pk
+        shifted = self.client.get(reverse("dashboard"), params)
+        self.assertEqual(shifted.context["selected_staff_id"], self.staff_b.pk)
+        self.assertEqual(shifted.context["selected_shift_id"], self.shift.pk)
+
+        params["category"] = other_category.pk
+        changed_position = self.client.get(reverse("dashboard"), params)
+        self.assertEqual(changed_position.context["selected_staff_id"], self.staff_b.pk)
+        self.assertEqual(changed_position.context["operational_date"], date(2026, 9, 15))
+        self.assertEqual(
+            list(
+                changed_position.context["selected_definitions"].values_list(
+                    "shift__name", flat=True
+                )
+            ),
+            ["Morning"],
+        )
 
     def test_inactive_staff_is_not_available_for_new_work(self):
         self.staff_a.is_active = False
@@ -507,6 +666,16 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertNotContains(response, "Use your staff account")
 
 
+class SimpleOperationalSeedTests(TestCase):
+    def test_fresh_seed_accepts_simple_hashed_operational_password(self):
+        with patch.dict(os.environ, {"CHORE_OPERATIONAL_PASSWORD": "123"}, clear=False):
+            call_command("seed_development", reset_passwords=True, verbosity=0)
+        operator = get_user_model().objects.get(username="sonderhouse")
+        self.assertNotEqual(operator.password, "123")
+        self.assertTrue(operator.check_password("123"))
+        self.assertIsNotNone(authenticate(username="sonderhouse", password="123"))
+
+
 class SeedCorrectionTests(TestCase):
     def setUp(self):
         self.environment = patch.dict(
@@ -530,6 +699,12 @@ class SeedCorrectionTests(TestCase):
         operator = get_user_model().objects.get(username="sonderhouse")
         self.assertTrue(operator.check_password("operational-password"))
         self.assertEqual(operator.program_memberships.get().role, ProgramRole.OPERATIONAL)
+        with patch.dict(os.environ, {"CHORE_OPERATIONAL_PASSWORD": "123"}, clear=False):
+            call_command("seed_development", reset_passwords=True, verbosity=0)
+        operator.refresh_from_db()
+        self.assertTrue(operator.check_password("123"))
+        self.assertIsNotNone(authenticate(username="sonderhouse", password="123"))
+        self.assertIsNone(authenticate(username="sonderhouse", password="incorrect"))
 
     def test_exact_three_shift_identities_and_metadata(self):
         self.assertEqual(

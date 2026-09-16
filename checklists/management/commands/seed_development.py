@@ -2,6 +2,7 @@ import os
 from datetime import time
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils.text import slugify
@@ -180,15 +181,7 @@ class Command(BaseCommand):
             is_superuser=False,
             password_env="CHORE_OPERATIONAL_PASSWORD",
             reset_passwords=options["reset_passwords"],
-        )
-        ProgramMembership.objects.update_or_create(
-            user=operational_user,
-            program=program,
-            defaults={
-                "role": ProgramRole.OPERATIONAL,
-                "is_active": True,
-                "receive_scheduled_reports": False,
-            },
+            operational_program=program,
         )
 
         self.stdout.write(
@@ -303,6 +296,7 @@ class Command(BaseCommand):
         is_superuser,
         password_env,
         reset_passwords,
+        operational_program=None,
     ):
         User = get_user_model()
         user, created = User.objects.get_or_create(username=username)
@@ -311,8 +305,20 @@ class Command(BaseCommand):
         user.is_active = True
         user.is_staff = is_staff
         user.is_superuser = is_superuser
+        user.save()
+        if operational_program is not None:
+            ProgramMembership.objects.update_or_create(
+                user=user,
+                program=operational_program,
+                defaults={
+                    "role": ProgramRole.OPERATIONAL,
+                    "is_active": True,
+                    "receive_scheduled_reports": False,
+                },
+            )
         password = os.environ.get(password_env)
         if password and (created or reset_passwords):
+            validate_password(password, user)
             user.set_password(password)
         elif created:
             user.set_unusable_password()

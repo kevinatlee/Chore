@@ -30,46 +30,32 @@
         <option value="rolling365" {% if period.kind == 'rolling365' %}selected{% endif %}>Rolling 365 days</option>
       </select>
     </label>
-    <label>Date / week / rolling end
-      <input type="date" name="date" value="{% firstof filters.date period.end|date:'Y-m-d' %}">
+    <label>Date
+      <input type="date" name="date" value="{{ period.selected_date|date:'Y-m-d' }}">
     </label>
-    <label>Month
-      <input type="month" name="month" value="{% firstof filters.month period.start|date:'Y-m' %}">
-    </label>
-    <label>Year
-      <input type="number" name="year" min="2000" max="2200" value="{% firstof filters.year period.start|date:'Y' %}">
-    </label>
-    <label>Staff category
-      <select name="category">
-        <option value="">All categories</option>
+    <label>Position
+      <select id="report-position" name="category">
+        <option value="">All positions</option>
         {% for choice in category_choices %}<option value="{{ choice.pk }}" {% if filters.category == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
       </select>
     </label>
     <label>Shift
-      <select name="shift">
+      <select id="report-shift" name="shift">
         <option value="">All valid shifts</option>
         {% for choice in shift_choices %}<option value="{{ choice.pk }}" {% if filters.shift == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
       </select>
     </label>
-    <label>Staff contribution
+    <label>Staff
       <select name="staff">
-        <option value="">All contributors</option>
+        <option value="">All staff</option>
         {% for choice in staff_choices %}<option value="{{ choice.pk }}" {% if filters.staff == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.display_name }}</option>{% endfor %}
       </select>
     </label>
-    <label>Checklist state
+    <label>Completion
       <select name="status">
-        <option value="">All states</option>
-        <option value="completed" {% if filters.status == 'completed' %}selected{% endif %}>Completed</option>
+        <option value="">All</option>
+        <option value="completed" {% if filters.status == 'completed' %}selected{% endif %}>Complete</option>
         <option value="incomplete" {% if filters.status == 'incomplete' %}selected{% endif %}>Incomplete</option>
-      </select>
-    </label>
-    <label>Task state
-      <select name="task_state">
-        <option value="">Any task state</option>
-        <option value="pending" {% if filters.task_state == 'pending' %}selected{% endif %}>Pending</option>
-        <option value="completed" {% if filters.task_state == 'completed' %}selected{% endif %}>Completed</option>
-        <option value="na" {% if filters.task_state == 'na' %}selected{% endif %}>N/A</option>
       </select>
     </label>
     <label>Section
@@ -81,6 +67,31 @@
     <div class="filter-actions"><button class="button primary" type="submit">Apply filters</button><a class="button secondary" href="{% url 'reports' %}">Reset</a></div>
   </form>
 
+  {{ shift_options_by_position|json_script:"report-position-shift-options" }}
+  <script>
+    (() => {
+      const position = document.getElementById("report-position");
+      const shift = document.getElementById("report-shift");
+      const choices = JSON.parse(
+        document.getElementById("report-position-shift-options").textContent
+      );
+      position.addEventListener("change", () => {
+        const previousShift = shift.value;
+        shift.replaceChildren(
+          new Option("All valid shifts", ""),
+          ...(choices[position.value] || []).map(
+            choice => new Option(
+              choice.name,
+              choice.id,
+              false,
+              String(choice.id) === previousShift
+            )
+          )
+        );
+      });
+    })();
+  </script>
+
   <div class="summary-grid" aria-label="Report summary">
     <div><strong>{{ totals.checklists }}</strong><span>Checklists</span></div>
     <div><strong>{{ totals.completed }}/{{ totals.applicable }}</strong><span>Applicable tasks completed</span></div>
@@ -91,7 +102,7 @@
 
   <div class="table-wrap">
     <table class="report-table">
-      <thead><tr><th>Date</th><th>Category</th><th>Shift</th><th>State</th><th>Completed</th><th>N/A</th><th>Pending</th><th>Completion</th><th>Contributors</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Position</th><th>Shift</th><th>Completion</th><th>Completed</th><th>N/A</th><th>Pending</th><th>Completion rate</th><th>Staff</th><th></th></tr></thead>
       <tbody>
         {% for row in rows %}
           <tr>

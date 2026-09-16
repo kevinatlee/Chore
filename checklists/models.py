@@ -172,7 +172,7 @@ class ChecklistDefinition(ActiveOrderedModel):
         errors = {}
         if original["category_id"] != self.category_id:
             errors["category"] = (
-                "Category cannot change after this definition has operational checklists."
+                "Position cannot change after this definition has operational checklists."
             )
         if original["shift_id"] != self.shift_id:
             errors["shift"] = (
@@ -274,7 +274,9 @@ class TaskDefinition(models.Model):
 
     def __str__(self):
         prefix = f"{self.get_weekday_display()}: " if self.weekday is not None else ""
-        return f"{self.section} — {prefix}{self.label}"
+        from .presentation import display_task_text
+
+        return f"{self.section} — {prefix}{display_task_text(self.label)}"
 
 
 class TaskState(models.TextChoices):
@@ -328,11 +330,11 @@ class ChecklistInstance(models.Model):
         definition = self.definition
         errors = {}
         if self.category_id and definition.category_id != self.category_id:
-            errors["category"] = "Category must match the checklist definition."
+            errors["category"] = "Position must match the checklist definition."
         if self.shift_id and definition.shift_id != self.shift_id:
             errors["shift"] = "Shift must match the checklist definition."
         if self.program_id and definition.category.program_id != self.program_id:
-            errors["program"] = "Program must match the checklist category."
+            errors["program"] = "Program must match the checklist position."
         if errors:
             raise ValidationError(errors)
 

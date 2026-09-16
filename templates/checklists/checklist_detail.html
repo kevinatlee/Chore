@@ -1,7 +1,8 @@
 {% extends "base.html" %}
+{% load checklist_display %}
 {% block title %}{{ instance.category_name_snapshot }} · {{ instance.shift_name_snapshot }} · Chore{% endblock %}
 {% block content %}
-  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}&category={{ instance.category_id }}">← Checklist selector</a>
+  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}&staff={{ staff_member.pk }}&category={{ instance.category_id }}&shift={{ instance.shift_id }}">← Checklist selector</a>
   <div class="checklist-heading">
     <div>
       <p class="eyebrow">Shared operational checklist</p>
@@ -29,7 +30,7 @@
                 {% if item.scheduled_start_snapshot %}
                   <span class="task-time">{{ item.scheduled_start_snapshot|time:"H:i" }}–{{ item.scheduled_end_snapshot|time:"H:i" }}</span>
                 {% endif %}
-                <h3>{{ item.task_label_snapshot }}</h3>
+                <h3>{{ item.task_label_snapshot|task_text }}</h3>
               </div>
               <div class="task-attribution">
                 <span class="status status-{{ item.current_state }}">{{ item.get_current_state_display }}</span>
@@ -73,7 +74,7 @@
       {% for contribution in contributions %}
         <li>
           <strong>{{ contribution.staff.display_name }}</strong>
-          changed “{{ contribution.item.task_label_snapshot }}” from
+          changed “{{ contribution.item.task_label_snapshot|task_text }}” from
           {{ contribution.get_previous_state_display }} to {{ contribution.get_new_state_display }}
           <time datetime="{{ contribution.created_at|date:'c' }}">{{ contribution.created_at|date:"M j, Y H:i" }}</time>
         </li>

@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from .presentation import display_task_text
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
@@ -99,7 +100,7 @@ class TaskDefinitionAdmin(admin.ModelAdmin):
 
     @admin.display(description="Task")
     def short_label(self, obj):
-        return obj.label[:80]
+        return display_task_text(obj.label)[:80]
 
 
 @admin.register(StaffMember)

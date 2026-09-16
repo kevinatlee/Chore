@@ -5,7 +5,7 @@
     <div>
       <p class="eyebrow">{{ program.name }} operations</p>
       <h1>Open a shared checklist</h1>
-      <p>Select who is doing the work, then choose a valid category and shift.</p>
+      <p>Select who is doing the work, then choose a valid position and shift.</p>
     </div>
   </div>
 
@@ -21,20 +21,38 @@
     <label for="staff">Staff member</label>
     <select id="staff" name="staff" required>
       <option value="">Select staff member</option>
-      {% for staff in staff_members %}<option value="{{ staff.pk }}">{{ staff.display_name }}</option>{% endfor %}
+      {% for staff in staff_members %}<option value="{{ staff.pk }}" {% if staff.pk == selected_staff_id %}selected{% endif %}>{{ staff.display_name }}</option>{% endfor %}
     </select>
 
-    <label for="category">Staff category</label>
-    <select id="category" name="category" required onchange="window.location='{% url 'dashboard' %}?category='+this.value+'&date='+document.getElementById('date').value">
+    <label for="category">Position</label>
+    <select id="category" name="category" required>
       {% for category in categories %}<option value="{{ category.pk }}" {% if category.pk == selected_category_id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}
     </select>
 
     <label for="shift">Shift</label>
     <select id="shift" name="shift" required>
-      {% for definition in selected_definitions %}<option value="{{ definition.shift_id }}">{{ definition.shift.name }}</option>{% endfor %}
+      {% for definition in selected_definitions %}<option value="{{ definition.shift_id }}" {% if definition.shift_id == selected_shift_id %}selected{% endif %}>{{ definition.shift.name }}</option>{% endfor %}
     </select>
 
     <button class="button primary" type="submit">Open shared checklist</button>
   </form>
+
+  {{ shift_options_by_category|json_script:"position-shift-options" }}
+  <script>
+    (() => {
+      const position = document.getElementById("category");
+      const shift = document.getElementById("shift");
+      const choices = JSON.parse(document.getElementById("position-shift-options").textContent);
+      const updateShiftChoices = () => {
+        const previousShift = shift.value;
+        shift.replaceChildren(
+          ...(choices[position.value] || []).map(
+            choice => new Option(choice.name, choice.id, false, String(choice.id) === previousShift)
+          )
+        );
+      };
+      position.addEventListener("change", updateShiftChoices);
+    })();
+  </script>
 
 {% endblock %}

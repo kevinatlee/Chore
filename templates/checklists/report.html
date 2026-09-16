@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Chore Reports · Chore{% endblock %}
+{% block content %}
+  <div class="page-heading report-heading">
+    <div>
+      <p class="eyebrow">{{ program.name }}</p>
+      <h1>Chore Reports</h1>
+      <p>{{ period.label }} · Live from current stored operational data.</p>
+    </div>
+    <div class="report-actions">
+      <a class="button secondary" href="{% url 'report-csv' %}?{{ query_string }}">Export CSV</a>
+      <a class="button secondary" href="{% url 'report-print' %}?{{ query_string }}">Print / Save PDF</a>
+    </div>
+  </div>
+
+  <form method="get" class="report-filters">
+    {% if available_programs.count > 1 %}
+      <label class="report-program-filter">Program
+        <select name="program">
+          {% for choice in available_programs %}<option value="{{ choice.pk }}" {% if choice.pk == program.pk %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+        </select>
+      </label>
+    {% endif %}
+    <div class="report-filter-row report-filter-row-primary">
+      <label>Period
+        <select name="period">
+          <option value="daily" {% if period.kind == 'daily' %}selected{% endif %}>Daily</option>
+          <option value="weekly" {% if period.kind == 'weekly' %}selected{% endif %}>Weekly</option>
+          <option value="monthly" {% if period.kind == 'monthly' %}selected{% endif %}>Monthly</option>
+          <option value="annual" {% if period.kind == 'annual' %}selected{% endif %}>Calendar year</option>
+          <option value="rolling365" {% if period.kind == 'rolling365' %}selected{% endif %}>Rolling 365 days</option>
+        </select>
+      </label>
+      <label>Date
+        <input type="date" name="date" value="{{ period.selected_date|date:'Y-m-d' }}">
+      </label>
+      <label>Completion
+        <select name="status">
+          <option value="">All</option>
+          <option value="completed" {% if filters.status == 'completed' %}selected{% endif %}>Complete</option>
+          <option value="incomplete" {% if filters.status == 'incomplete' %}selected{% endif %}>Incomplete</option>
+        </select>
+      </label>
+      <label>Section
+        <select name="section">
+          <option value="">All</option>
+          {% for choice in section_choices %}<option value="{{ choice }}" {% if filters.section == choice %}selected{% endif %}>{{ choice }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="report-filter-row report-filter-row-secondary">
+      <label>Position
+        <select id="report-position" name="category">
+          <option value="">All positions</option>
+          {% for choice in category_choices %}<option value="{{ choice.pk }}" {% if filters.category == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Shift
+        <select id="report-shift" name="shift">
+          <option value="">All shifts</option>
+          {% for choice in shift_choices %}<option value="{{ choice.pk }}" {% if filters.shift == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Staff
+        <select name="staff">
+          <option value="">All staff</option>
+          {% for choice in staff_choices %}<option value="{{ choice.pk }}" {% if filters.staff == choice.pk|stringformat:'s' %}selected{% endif %}>{{ choice.display_name }}</option>{% endfor %}
+        </select>
+      </label>
+      <div class="filter-actions"><button class="button primary" type="submit">Apply Filters</button><a class="button secondary" href="{% url 'reports' %}">Reset Filters</a></div>
+    </div>
+  </form>
+
+  {{ shift_options_by_position|json_script:"report-position-shift-options" }}
+  <script>
+    (() => {
+      const position = document.getElementById("report-position");
+      const shift = document.getElementById("report-shift");
+      const choices = JSON.parse(
+        document.getElementById("report-position-shift-options").textContent
+      );
+      position.addEventListener("change", () => {
+        const previousShift = shift.value;
+        shift.replaceChildren(
+          new Option("All shifts", ""),
+          ...(choices[position.value] || []).map(
+            choice => new Option(
+              choice.name,
+              choice.id,
+              false,
+              String(choice.id) === previousShift
+            )
+          )
+        );
+      });
+    })();
+  </script>
+
+  <div class="summary-grid" aria-label="Report summary">
+    <div><strong>{{ totals.checklists }}</strong><span>Chore Lists</span></div>
+    <div><strong>{{ totals.completed }}/{{ totals.applicable }}</strong><span>Applicable tasks completed</span></div>
+    <div><strong>{{ totals.na }}</strong><span>N/A</span></div>
+    <div><strong>{{ totals.pending }}</strong><span>Pending</span></div>
+    <div><strong>{{ totals.completion_percentage }}%</strong><span>Completion</span></div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="report-table">
+      <thead><tr><th class="report-date">Date</th><th>Position</th><th>Shift</th><th>Completion</th><th>Completed</th><th>N/A</th><th>Pending</th><th>Completion rate</th><th>Staff</th><th></th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td class="report-date">{{ row.operational_date|date:"Y-m-d" }}</td><td>{{ row.category }}</td><td>{{ row.shift }}</td>
+            <td><span class="status status-{{ row.status }}">{{ row.status|title }}</span></td>
+            <td>{{ row.completed_count }}/{{ row.applicable_count }}</td><td>{{ row.na_count }}</td><td>{{ row.pending_count }}</td><td>{{ row.completion_percentage }}%</td>
+            <td>{% for contributor in row.contributors %}{{ contributor }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}</td>
+            <td><a href="{% url 'report-detail' row.id %}?{{ query_string }}">Drill down</a></td>
+          </tr>
+        {% empty %}<tr><td colspan="10">No operational Chore Lists match this period and filter set.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

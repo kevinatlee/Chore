@@ -6,6 +6,90 @@ from django.db import models
 from django.db.models import Q
 
 
+def get_default_program_pk():
+    """Keep Phase 1 callers compatible while assigning every record to a Program."""
+    return Program.objects.get_or_create(
+        slug="sonder-house", defaults={"name": "Sonder House"}
+    )[0].pk
+
+
+class Program(models.Model):
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=80, unique=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("name", "id")
+
+    def __str__(self):
+        return self.name
+
+
+class ProgramRole(models.TextChoices):
+    OPERATIONAL = "operational", "Operational access"
+    MANAGER = "manager", "Manager"
+
+
+class ProgramMembership(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="program_memberships"
+    )
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="memberships"
+    )
+    role = models.CharField(max_length=16, choices=ProgramRole.choices)
+    is_active = models.BooleanField(default=True)
+    receive_scheduled_reports = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ("program__name", "role", "user__username")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "program"), name="unique_user_program_membership"
+            )
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.receive_scheduled_reports and self.role != ProgramRole.MANAGER:
+            raise ValidationError(
+                {"receive_scheduled_reports": "Only Managers may receive scheduled reports."}
+            )
+
+    def __str__(self):
+        return f"{self.user} — {self.program} ({self.get_role_display()})"
+
+
+class StaffMember(models.Model):
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="staff_members"
+    )
+    first_name = models.CharField(max_length=100)
+    last_name = models.CharField(max_length=100)
+    is_active = models.BooleanField(default=True)
+    seed_key = models.SlugField(
+        max_length=220, unique=True, null=True, blank=True, editable=False
+    )
+
+    class Meta:
+        ordering = ("first_name", "last_name", "id")
+        verbose_name = "operational staff member"
+        verbose_name_plural = "operational staff"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("program", "first_name", "last_name"),
+                name="unique_program_staff_name",
+            )
+        ]
+
+    @property
+    def display_name(self):
+        return f"{self.first_name} {self.last_name}".strip()
+
+    def __str__(self):
+        return self.display_name
+
+
 class ActiveOrderedModel(models.Model):
     name = models.CharField(max_length=120)
     sort_order = models.PositiveIntegerField(default=0)
@@ -20,10 +104,21 @@ class ActiveOrderedModel(models.Model):
 
 
 class StaffCategory(ActiveOrderedModel):
-    slug = models.SlugField(max_length=80, unique=True)
+    program = models.ForeignKey(
+        Program,
+        on_delete=models.PROTECT,
+        related_name="staff_categories",
+        default=get_default_program_pk,
+    )
+    slug = models.SlugField(max_length=80)
 
     class Meta(ActiveOrderedModel.Meta):
         verbose_name_plural = "staff categories"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("program", "slug"), name="unique_program_category_slug"
+            )
+        ]
 
 
 class Shift(ActiveOrderedModel):
@@ -77,11 +172,11 @@ class ChecklistDefinition(ActiveOrderedModel):
         errors = {}
         if original["category_id"] != self.category_id:
             errors["category"] = (
-                "Category cannot change after this definition has operational checklists."
+                "Position cannot change after this definition has operational Chore Lists."
             )
         if original["shift_id"] != self.shift_id:
             errors["shift"] = (
-                "Shift cannot change after this definition has operational checklists."
+                "Shift cannot change after this definition has operational Chore Lists."
             )
         if errors:
             raise ValidationError(errors)
@@ -179,28 +274,9 @@ class TaskDefinition(models.Model):
 
     def __str__(self):
         prefix = f"{self.get_weekday_display()}: " if self.weekday is not None else ""
-        return f"{self.section} — {prefix}{self.label}"
+        from .presentation import display_task_text
 
-
-class StaffAssignment(models.Model):
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="staff_assignments"
-    )
-    category = models.ForeignKey(
-        StaffCategory, on_delete=models.PROTECT, related_name="staff_assignments"
-    )
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ("user__username", "category__sort_order", "category__name")
-        constraints = [
-            models.UniqueConstraint(
-                fields=("user", "category"), name="unique_staff_category_assignment"
-            )
-        ]
-
-    def __str__(self):
-        return f"{self.user} — {self.category}"
+        return f"{self.section} — {prefix}{display_task_text(self.label)}"
 
 
 class TaskState(models.TextChoices):
@@ -210,6 +286,12 @@ class TaskState(models.TextChoices):
 
 
 class ChecklistInstance(models.Model):
+    program = models.ForeignKey(
+        Program,
+        on_delete=models.PROTECT,
+        related_name="checklist_instances",
+        default=get_default_program_pk,
+    )
     operational_date = models.DateField()
     definition = models.ForeignKey(
         ChecklistDefinition, on_delete=models.PROTECT, related_name="instances"
@@ -225,6 +307,7 @@ class ChecklistInstance(models.Model):
     shift_start_snapshot = models.TimeField()
     shift_end_snapshot = models.TimeField()
     created_at = models.DateTimeField(auto_now_add=True)
+    is_mock_data = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("-operational_date", "category_name_snapshot", "shift_start_snapshot")
@@ -247,9 +330,11 @@ class ChecklistInstance(models.Model):
         definition = self.definition
         errors = {}
         if self.category_id and definition.category_id != self.category_id:
-            errors["category"] = "Category must match the checklist definition."
+            errors["category"] = "Position must match the Chore List definition."
         if self.shift_id and definition.shift_id != self.shift_id:
-            errors["shift"] = "Shift must match the checklist definition."
+            errors["shift"] = "Shift must match the Chore List definition."
+        if self.program_id and definition.category.program_id != self.program_id:
+            errors["program"] = "Program must match the Chore List position."
         if errors:
             raise ValidationError(errors)
 
@@ -282,8 +367,8 @@ class ChecklistItem(models.Model):
     current_state = models.CharField(
         max_length=16, choices=TaskState.choices, default=TaskState.PENDING
     )
-    current_contributor = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+    current_staff = models.ForeignKey(
+        StaffMember,
         on_delete=models.PROTECT,
         related_name="current_checklist_items",
         null=True,
@@ -323,9 +408,16 @@ class StaffContribution(models.Model):
         ChecklistItem, on_delete=models.PROTECT, related_name="contributions"
     )
     staff = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        StaffMember,
         on_delete=models.PROTECT,
         related_name="staff_contributions",
+    )
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_staff_contributions",
+        null=True,
+        blank=True,
     )
     previous_state = models.CharField(max_length=16, choices=TaskState.choices)
     new_state = models.CharField(max_length=16, choices=TaskState.choices)
@@ -354,3 +446,61 @@ class StaffContribution(models.Model):
 
     def __str__(self):
         return f"{self.staff}: {self.previous_state} → {self.new_state}"
+
+
+class ReportCadence(models.TextChoices):
+    DAILY = "daily", "Daily"
+    WEEKLY = "weekly", "Weekly"
+    MONTHLY = "monthly", "Monthly"
+    ANNUAL = "annual", "Annual"
+
+
+class DeliveryState(models.TextChoices):
+    PENDING = "pending", "Pending"
+    SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
+
+
+class ScheduledReportDelivery(models.Model):
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="report_deliveries"
+    )
+    cadence = models.CharField(max_length=16, choices=ReportCadence.choices)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="scheduled_report_deliveries",
+    )
+    recipient_email = models.EmailField()
+    generated_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    state = models.CharField(
+        max_length=16, choices=DeliveryState.choices, default=DeliveryState.PENDING
+    )
+    subject = models.CharField(max_length=255)
+    body_html = models.TextField()
+    snapshot = models.JSONField(default=dict)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ("-period_end", "program__name", "cadence", "recipient_email")
+        constraints = [
+            models.UniqueConstraint(
+                fields=(
+                    "program",
+                    "cadence",
+                    "period_start",
+                    "period_end",
+                    "recipient",
+                ),
+                name="unique_scheduled_report_delivery",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.program} {self.get_cadence_display()} "
+            f"{self.period_start}–{self.period_end} to {self.recipient_email}"
+        )

@@ -1,9 +1,10 @@
+import csv
 from datetime import date
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import ValidationError
-from django.http import HttpResponseBadRequest
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -12,11 +13,18 @@ from django.views.decorators.http import require_POST
 from .models import (
     ChecklistDefinition,
     ChecklistItem,
-    StaffAssignment,
     StaffContribution,
+    StaffMember,
     TaskState,
 )
-from .services import change_item_state, resolve_checklist
+from .operational_dates import operational_entry_bounds, validate_operational_entry_date
+from .services import (
+    can_operate_program,
+    change_item_state,
+    programs_for_operations,
+    resolve_checklist,
+)
+from .reporting import build_report, period_from_params, programs_for_reporting, selected_program
 
 
 def _selected_date(request):
@@ -29,57 +37,161 @@ def _selected_date(request):
         raise ValidationError("Use a valid date in YYYY-MM-DD format.") from exc
 
 
-def _can_access_category(user, category_id):
-    if user.is_staff:
-        return True
-    return StaffAssignment.objects.filter(
-        user=user, category_id=category_id, is_active=True
-    ).exists()
+def _selected_operational_date(request):
+    return validate_operational_entry_date(_selected_date(request))
+
+
+@login_required
+def home(request):
+    if request.user.is_superuser:
+        return redirect("reports")
+    if programs_for_reporting(request.user).exists():
+        return redirect("reports")
+    if programs_for_operations(request.user).exists():
+        return redirect("dashboard")
+    raise PermissionDenied("This account has no active Chore access.")
 
 
 @login_required
 def dashboard(request):
+    available_programs = programs_for_operations(request.user)
+    raw_program = request.GET.get("program")
     try:
-        operational_date = _selected_date(request)
+        program_id = int(raw_program) if raw_program else None
+    except ValueError:
+        program_id = None
+    program = available_programs.filter(pk=program_id).first() if program_id else available_programs.first()
+    if program is None:
+        raise PermissionDenied("Operational-entry access is required.")
+    try:
+        operational_date = _selected_operational_date(request)
     except ValidationError as exc:
-        messages.error(request, " ".join(exc.messages))
-        operational_date = timezone.localdate()
+        return HttpResponseBadRequest(" ".join(exc.messages))
 
     definitions = ChecklistDefinition.objects.filter(
-        is_active=True, category__is_active=True, shift__is_active=True
-    ).select_related("category", "shift")
-    if not request.user.is_staff:
-        definitions = definitions.filter(
-            category__staff_assignments__user=request.user,
-            category__staff_assignments__is_active=True,
+        is_active=True,
+        category__program=program,
+        category__is_active=True,
+        category__program__is_active=True,
+        shift__is_active=True,
+    ).select_related("category", "shift").order_by(
+        "category__sort_order", "shift__sort_order"
+    )
+    categories = []
+    seen_categories = set()
+    for definition in definitions:
+        if definition.category_id not in seen_categories:
+            categories.append(definition.category)
+            seen_categories.add(definition.category_id)
+    try:
+        selected_category_id = int(request.GET.get("category", ""))
+    except ValueError:
+        selected_category_id = categories[0].pk if categories else None
+    if selected_category_id not in seen_categories:
+        selected_category_id = categories[0].pk if categories else None
+    staff_members = StaffMember.objects.filter(program=program, is_active=True)
+    try:
+        requested_staff_id = int(request.GET.get("staff", ""))
+    except ValueError:
+        requested_staff_id = None
+    selected_staff_id = (
+        requested_staff_id
+        if requested_staff_id and staff_members.filter(pk=requested_staff_id).exists()
+        else None
+    )
+    selected_definitions = definitions.filter(category_id=selected_category_id)
+    shift_options_by_category = {}
+    for definition in definitions:
+        shift_options_by_category.setdefault(str(definition.category_id), []).append(
+            {"id": definition.shift_id, "name": definition.shift.name}
         )
+    valid_shift_ids = list(selected_definitions.values_list("shift_id", flat=True))
+    try:
+        requested_shift_id = int(request.GET.get("shift", ""))
+    except ValueError:
+        requested_shift_id = None
+    selected_shift_id = (
+        requested_shift_id
+        if requested_shift_id in valid_shift_ids
+        else next(iter(valid_shift_ids), None)
+    )
+    earliest_operational_date, latest_operational_date = operational_entry_bounds()
     return render(
         request,
         "checklists/dashboard.html",
-        {"definitions": definitions.distinct(), "operational_date": operational_date},
+        {
+            "available_programs": available_programs,
+            "program": program,
+            "operational_date": operational_date,
+            "earliest_operational_date": earliest_operational_date,
+            "latest_operational_date": latest_operational_date,
+            "staff_members": staff_members,
+            "selected_staff_id": selected_staff_id,
+            "categories": categories,
+            "definitions": definitions,
+            "selected_definitions": selected_definitions,
+            "shift_options_by_category": shift_options_by_category,
+            "selected_category_id": selected_category_id,
+            "selected_shift_id": selected_shift_id,
+        },
+    )
+
+
+@login_required
+def open_checklist(request):
+    try:
+        operational_date = _selected_operational_date(request)
+    except ValidationError as exc:
+        return HttpResponseBadRequest(" ".join(exc.messages))
+    definition = get_object_or_404(
+        ChecklistDefinition.objects.select_related("category__program", "shift"),
+        category_id=request.GET.get("category"),
+        shift_id=request.GET.get("shift"),
+        is_active=True,
+        category__is_active=True,
+        category__program__is_active=True,
+        shift__is_active=True,
+    )
+    if not can_operate_program(request.user, definition.category.program_id):
+        raise PermissionDenied("Operational-entry access is required for this Program.")
+    staff_member = get_object_or_404(
+        StaffMember,
+        pk=request.GET.get("staff"),
+        program=definition.category.program,
+        is_active=True,
+    )
+    resolve_checklist(definition, operational_date)
+    target = reverse("checklist-detail", args=(definition.pk,))
+    return redirect(
+        f"{target}?date={operational_date.isoformat()}&staff={staff_member.pk}"
     )
 
 
 @login_required
 def checklist_detail(request, definition_id):
     definition = get_object_or_404(
-        ChecklistDefinition.objects.select_related("category", "shift"),
+        ChecklistDefinition.objects.select_related("category__program", "shift"),
         pk=definition_id,
         is_active=True,
         category__is_active=True,
+        category__program__is_active=True,
         shift__is_active=True,
     )
-    if not _can_access_category(request.user, definition.category_id):
-        from django.core.exceptions import PermissionDenied
-
-        raise PermissionDenied
+    if not can_operate_program(request.user, definition.category.program_id):
+        raise PermissionDenied("Operational-entry access is required for this Program.")
+    staff_member = get_object_or_404(
+        StaffMember,
+        pk=request.GET.get("staff"),
+        program=definition.category.program,
+        is_active=True,
+    )
     try:
-        operational_date = _selected_date(request)
+        operational_date = _selected_operational_date(request)
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
 
     instance = resolve_checklist(definition, operational_date)
-    items = instance.items.select_related("current_contributor").order_by(
+    items = instance.items.select_related("current_staff").order_by(
         "section_order_snapshot", "task_order_snapshot", "scheduled_start_snapshot", "id"
     )
     sections = []
@@ -109,6 +221,7 @@ def checklist_detail(request, definition_id):
             "states": TaskState,
             "total_count": total_count,
             "completed_count": completed_count,
+            "staff_member": staff_member,
         },
     )
 
@@ -122,7 +235,15 @@ def update_item_state(request, item_id):
     )
     try:
         _, contribution = change_item_state(
-            item_id=item_id, staff=request.user, new_state=request.POST.get("state", "")
+            item_id=item_id,
+            actor=request.user,
+            staff_member=get_object_or_404(
+                StaffMember,
+                pk=request.POST.get("staff"),
+                program=item.instance.program,
+                is_active=True,
+            ),
+            new_state=request.POST.get("state", ""),
         )
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
@@ -130,4 +251,95 @@ def update_item_state(request, item_id):
     if contribution:
         messages.success(request, "Task updated and Staff Contribution recorded.")
     target = reverse("checklist-detail", args=(item.instance.definition_id,))
-    return redirect(f"{target}?date={item.instance.operational_date.isoformat()}")
+    return redirect(
+        f"{target}?date={item.instance.operational_date.isoformat()}&staff={request.POST.get('staff')}"
+    )
+
+
+def _report_for_request(request):
+    program = selected_program(request.user, request.GET.get("program"))
+    if program is None:
+        raise PermissionDenied("Manager reporting access is required.")
+    period = period_from_params(request.GET, timezone.localdate())
+    report = build_report(
+        program=program,
+        period=period,
+        filters=request.GET,
+    )
+    report["available_programs"] = programs_for_reporting(request.user)
+    query_params = request.GET.copy()
+    query_params["period"] = period.kind
+    query_params["date"] = period.selected_date.isoformat()
+    query_params.pop("month", None)
+    query_params.pop("year", None)
+    report["query_string"] = query_params.urlencode()
+    return report
+
+
+@login_required
+def reports(request):
+    return render(request, "checklists/report.html", _report_for_request(request))
+
+
+@login_required
+def report_detail(request, instance_id):
+    report = _report_for_request(request)
+    report["row"] = next((row for row in report["rows"] if row["id"] == instance_id), None)
+    if report["row"] is None:
+        raise PermissionDenied("This Chore List is outside the authorized report.")
+    return render(request, "checklists/report_detail.html", report)
+
+
+@login_required
+def report_print(request):
+    return render(request, "checklists/report_print.html", _report_for_request(request))
+
+
+@login_required
+def report_csv(request):
+    report = _report_for_request(request)
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    filename = f"chore-{report['program'].slug}-{report['period'].start}-{report['period'].end}.csv"
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "Operational date",
+            "Position",
+            "Shift",
+            "Completion",
+            "Applicable tasks",
+            "Completed tasks",
+            "N/A tasks",
+            "Pending tasks",
+            "Completion percentage",
+            "Chore List staff",
+            "Section",
+            "Task",
+            "Task state",
+            "Latest contributor",
+            "Latest contribution timestamp",
+        ]
+    )
+    for row in report["rows"]:
+        for task in row["filtered_tasks"]:
+            writer.writerow(
+                [
+                    row["operational_date"].isoformat(),
+                    row["category"],
+                    row["shift"],
+                    row["status"],
+                    row["applicable_count"],
+                    row["completed_count"],
+                    row["na_count"],
+                    row["pending_count"],
+                    row["completion_percentage"],
+                    "; ".join(row["contributors"]),
+                    task["section"],
+                    task["label"],
+                    task["state_label"],
+                    task["contributor"],
+                    task["changed_at"].isoformat() if task["changed_at"] else "",
+                ]
+            )
+    return response

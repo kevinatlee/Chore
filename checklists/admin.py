@@ -1,27 +1,52 @@
 from django.contrib import admin
 
+from .presentation import display_task_text
 from .models import (
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
     ChecklistSection,
+    Program,
+    ProgramMembership,
+    ScheduledReportDelivery,
     Shift,
-    StaffAssignment,
     StaffCategory,
     StaffContribution,
+    StaffMember,
     TaskDefinition,
 )
 
 
 admin.site.site_header = "Chore administration"
 admin.site.site_title = "Chore admin"
-admin.site.index_title = "Phase 1 configuration"
+admin.site.index_title = "Chore configuration and reporting"
+
+
+@admin.register(Program)
+class ProgramAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "is_active")
+    list_editable = ("is_active",)
+    search_fields = ("name", "slug")
+
+
+@admin.register(ProgramMembership)
+class ProgramMembershipAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "program",
+        "role",
+        "receive_scheduled_reports",
+        "is_active",
+    )
+    list_filter = ("program", "role", "receive_scheduled_reports", "is_active")
+    search_fields = ("user__username", "user__first_name", "user__last_name")
 
 
 @admin.register(StaffCategory)
 class StaffCategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "sort_order", "is_active")
+    list_display = ("name", "program", "slug", "sort_order", "is_active")
     list_editable = ("sort_order", "is_active")
+    list_filter = ("program", "is_active")
     search_fields = ("name", "slug")
 
 
@@ -35,7 +60,7 @@ class ShiftAdmin(admin.ModelAdmin):
 class ChecklistDefinitionAdmin(admin.ModelAdmin):
     list_display = ("name", "category", "shift", "sort_order", "is_active")
     list_editable = ("sort_order", "is_active")
-    list_filter = ("category", "shift", "is_active")
+    list_filter = ("category__program", "category", "shift", "is_active")
 
     def get_readonly_fields(self, request, obj=None):
         if obj and obj.instances.exists():
@@ -75,15 +100,24 @@ class TaskDefinitionAdmin(admin.ModelAdmin):
 
     @admin.display(description="Task")
     def short_label(self, obj):
-        return obj.label[:80]
+        return display_task_text(obj.label)[:80]
 
 
-@admin.register(StaffAssignment)
-class StaffAssignmentAdmin(admin.ModelAdmin):
-    list_display = ("user", "category", "is_active")
+@admin.register(StaffMember)
+class StaffMemberAdmin(admin.ModelAdmin):
+    list_display = ("first_name", "last_name", "program", "is_active", "contribution_count")
     list_editable = ("is_active",)
-    list_filter = ("category", "is_active")
-    search_fields = ("user__username", "user__first_name", "user__last_name")
+    list_filter = ("program", "is_active")
+    search_fields = ("first_name", "last_name")
+    ordering = ("first_name", "last_name")
+    fields = ("program", "first_name", "last_name", "is_active")
+
+    @admin.display(description="Contributions")
+    def contribution_count(self, obj):
+        return obj.staff_contributions.count()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class ChecklistItemInline(admin.TabularInline):
@@ -94,7 +128,7 @@ class ChecklistItemInline(admin.TabularInline):
         "section_name_snapshot",
         "task_label_snapshot",
         "current_state",
-        "current_contributor",
+        "current_staff",
         "state_changed_at",
     )
     readonly_fields = fields
@@ -137,7 +171,7 @@ class ChecklistItemAdmin(admin.ModelAdmin):
         "task_label_snapshot",
         "instance",
         "current_state",
-        "current_contributor",
+        "current_staff",
         "state_changed_at",
     )
     list_filter = ("current_state", "instance__category", "instance__shift")
@@ -154,7 +188,7 @@ class ChecklistItemAdmin(admin.ModelAdmin):
         "scheduled_start_snapshot",
         "scheduled_end_snapshot",
         "current_state",
-        "current_contributor",
+        "current_staff",
         "state_changed_at",
         "created_at",
         "updated_at",
@@ -169,16 +203,52 @@ class ChecklistItemAdmin(admin.ModelAdmin):
 
 @admin.register(StaffContribution)
 class StaffContributionAdmin(admin.ModelAdmin):
-    list_display = ("staff", "item", "previous_state", "new_state", "created_at")
+    list_display = ("staff", "item", "previous_state", "new_state", "recorded_by", "created_at")
     list_filter = ("new_state", "item__instance__category", "item__instance__shift")
-    search_fields = ("staff__username", "staff__first_name", "staff__last_name")
-    readonly_fields = ("item", "staff", "previous_state", "new_state", "created_at")
+    search_fields = ("staff__first_name", "staff__last_name", "recorded_by__username")
+    readonly_fields = ("item", "staff", "recorded_by", "previous_state", "new_state", "created_at")
 
     def has_add_permission(self, request):
         return False
 
     def has_change_permission(self, request, obj=None):
         return request.method in ("GET", "HEAD", "OPTIONS")
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ScheduledReportDelivery)
+class ScheduledReportDeliveryAdmin(admin.ModelAdmin):
+    list_display = (
+        "program",
+        "cadence",
+        "period_start",
+        "period_end",
+        "recipient_email",
+        "state",
+        "sent_at",
+    )
+    list_filter = ("program", "cadence", "state")
+    search_fields = ("recipient_email", "subject")
+    readonly_fields = (
+        "program",
+        "cadence",
+        "period_start",
+        "period_end",
+        "recipient",
+        "recipient_email",
+        "generated_at",
+        "sent_at",
+        "state",
+        "subject",
+        "body_html",
+        "snapshot",
+        "error_message",
+    )
+
+    def has_add_permission(self, request):
+        return False
 
     def has_delete_permission(self, request, obj=None):
         return False

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Chore List detail · Chore{% endblock %}
+{% block content %}
+  <a class="back-link" href="{% url 'reports' %}?{{ query_string }}">← Back to report</a>
+  <div class="page-heading">
+    <div><p class="eyebrow">{{ program.name }} · {{ row.operational_date|date:"Y-m-d" }}</p><h1>{{ row.category }} — {{ row.shift }}</h1><p>{{ row.completed_count }}/{{ row.applicable_count }} applicable complete · {{ row.na_count }} N/A · {{ row.pending_count }} pending · {{ row.completion_percentage }}%</p></div>
+  </div>
+  {% regroup row.filtered_tasks by section as section_list %}
+  {% for section in section_list %}
+    <section class="task-section"><h2>{{ section.grouper }}</h2>
+      <div class="task-list">
+        {% for task in section.list %}
+          <article class="task-card state-{{ task.state }}">
+            <div class="task-copy"><h3>{{ task.label }}</h3><p class="task-attribution"><span class="status status-{{ task.state }}">{{ task.state_label }}</span>{% if task.contributor %}Latest production contribution by {{ task.contributor }} at {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}No production contributions{% endif %}</p>
+              {% if task.contributions %}<details><summary>{{ task.contributions|length }} contribution{{ task.contributions|length|pluralize }}</summary><ol class="contribution-list">{% for contribution in task.contributions %}<li>{{ contribution.staff }}: {{ contribution.previous_state|title }} → {{ contribution.new_state|title }} <time>{{ contribution.created_at|date:"Y-m-d H:i:s" }}</time></li>{% endfor %}</ol></details>{% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endfor %}
+{% endblock %}

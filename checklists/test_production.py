@@ -1,4 +1,7 @@
+import os
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
 from datetime import date, timedelta
 from io import StringIO
@@ -19,6 +22,9 @@ from chore.sqlite_backups import (
     refresh_database_from_backup,
     validate_chore_database,
 )
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 
 class RuntimeConfigurationTests(SimpleTestCase):
@@ -48,6 +54,25 @@ class RuntimeConfigurationTests(SimpleTestCase):
     def test_boolean_parser_fails_closed_on_unknown_values(self):
         with self.assertRaises(ImproperlyConfigured):
             parse_bool("sometimes", name="EMAIL_ENABLED")
+
+    def test_container_entrypoint_imports_without_external_pythonpath(self):
+        dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn('ENTRYPOINT ["python", "-m", "docker.entrypoint"]', dockerfile)
+
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-m", "docker.entrypoint"],
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
+        self.assertIn("CHORE_DEPLOYMENT_MODE must be", result.stderr)
 
 
 class HealthEndpointTests(TestCase):

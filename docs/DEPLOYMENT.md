@@ -50,6 +50,29 @@ identity before starting the containers.
    `.env.test`, beside the Compose files. Both real env files are ignored by Git. Generate
    different long random `DJANGO_SECRET_KEY` values for production and test.
 
+## Unraid user template
+
+The versioned production user template is `unraid/my-Chore.xml`. Copy it to the Unraid
+boot device, preserving the filename:
+
+```sh
+cp /path/to/Chore/unraid/my-Chore.xml \
+  /boot/config/plugins/dockerMan/templates-user/my-Chore.xml
+```
+
+In the Unraid interface, open **Docker → Add Container** and select the Chore user
+template. Its defaults create `Chore` on the bridge network, map host port `4523` to
+container port `8000`, persist `/mnt/user/appdata/Chore` at `/app/data`, use the
+`ghcr.io/kevinatlee/chore:latest` image, restart unless stopped, and rotate three 10 MB
+Docker JSON log files. Supply `APP_FQDN`, a long random `DJANGO_SECRET_KEY`, Gmail SMTP
+values, and `DEFAULT_FROM_EMAIL` before applying the template.
+
+The template intentionally has no LAN HTTP WebUI link because Unraid templates cannot
+substitute `APP_FQDN` into that field. Production access remains the configured
+`https://APP_FQDN` through Cloudflare Tunnel. Do not disable HTTPS redirects or secure
+cookies to make `http://UNRAID-IP:4523` an application access path. The existing Docker
+Compose deployment below remains fully supported.
+
 ## Required environment
 
 Production `.env.production`:

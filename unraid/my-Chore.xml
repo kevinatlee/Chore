@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Container version="2">
+  <Name>Chore</Name>
+  <Repository>ghcr.io/kevinatlee/chore:latest</Repository>
+  <Registry>https://github.com/kevinatlee/Chore/pkgs/container/chore</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Project>https://github.com/kevinatlee/Chore</Project>
+  <Support>https://github.com/kevinatlee/Chore/issues</Support>
+  <TemplateURL>https://raw.githubusercontent.com/kevinatlee/Chore/main/unraid/my-Chore.xml</TemplateURL>
+  <WebUI/>
+  <Overview>Production Chore deployment. Access the application through the HTTPS hostname configured by APP_FQDN and the Cloudflare Tunnel. Direct LAN HTTP is intentionally not configured as the WebUI.</Overview>
+  <ExtraParams>--restart=unless-stopped --log-driver=json-file --log-opt=max-size=10m --log-opt=max-file=3</ExtraParams>
+
+  <Config Name="Web Port" Target="8000" Default="4523" Mode="tcp" Description="Host port forwarded to Chore's internal port 8000. Cloudflare Tunnel may use http://UNRAID_LAN_IP:4523 as its origin." Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="Appdata" Target="/app/data" Default="/mnt/user/appdata/Chore" Mode="rw" Description="Persistent production SQLite database and application-level backups." Type="Path" Display="always" Required="true" Mask="false"/>
+
+  <Config Name="Application FQDN" Target="APP_FQDN" Default="" Mode="" Description="Production hostname only, without https://, a path, or a port." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Django Debug" Target="DJANGO_DEBUG" Default="false" Mode="" Description="Must remain false for container deployments." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Django Secret Key" Target="DJANGO_SECRET_KEY" Default="" Mode="" Description="Long, random production-only Django secret key." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Django Log Level" Target="DJANGO_LOG_LEVEL" Default="INFO" Mode="" Description="Application console logging level." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="HSTS Seconds" Target="DJANGO_SECURE_HSTS_SECONDS" Default="0" Mode="" Description="Keep 0 during initial HTTPS validation; enable only when this hostname is permanently HTTPS-only." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+
+  <Config Name="Deployment Mode" Target="CHORE_DEPLOYMENT_MODE" Default="production" Mode="" Description="Production container mode." Type="Variable" Display="advanced-hide" Required="true" Mask="false"/>
+  <Config Name="Database Path" Target="CHORE_DATABASE_PATH" Default="/app/data/db.sqlite3" Mode="" Description="Persistent production SQLite database path inside the container." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Backup Directory" Target="CHORE_BACKUP_DIR" Default="/app/data/backups" Mode="" Description="Application-level SQLite backup directory inside persistent appdata." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Backup Retention" Target="CHORE_BACKUP_RETENTION" Default="7" Mode="" Description="Number of daily application backups retained." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Backups Enabled" Target="CHORE_BACKUPS_ENABLED" Default="true" Mode="" Description="Must remain true for production." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Timezone" Target="TZ" Default="America/Vancouver" Mode="" Description="Fixed Chore business timezone." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+
+  <Config Name="Email Enabled" Target="EMAIL_ENABLED" Default="true" Mode="" Description="Enable production Manager-report email delivery." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Email Host" Target="EMAIL_HOST" Default="smtp.gmail.com" Mode="" Description="Production SMTP hostname." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Email Port" Target="EMAIL_PORT" Default="587" Mode="" Description="Production SMTP port." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Email TLS" Target="EMAIL_USE_TLS" Default="true" Mode="" Description="Use STARTTLS for production SMTP." Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Email Username" Target="EMAIL_HOST_USER" Default="" Mode="" Description="Gmail address used for SMTP authentication." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Email App Password" Target="EMAIL_HOST_PASSWORD" Default="" Mode="" Description="Gmail App Password; do not use the normal account password." Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Default From Email" Target="DEFAULT_FROM_EMAIL" Default="" Mode="" Description="Sender address shown on Manager-report email." Type="Variable" Display="always" Required="true" Mask="false"/>
+</Container>

@@ -1,11 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Open a shared checklist · Chore{% endblock %}
+{% block title %}Select your Shift · Chore{% endblock %}
 {% block content %}
   <div class="page-heading">
     <div>
-      <p class="eyebrow">{{ program.name }} operations</p>
-      <h1>Open a shared checklist</h1>
-      <p>Select who is doing the work, then choose a valid position and shift.</p>
+      <p class="eyebrow">{{ program.name|upper }}</p>
+      <h1>Select your Shift</h1>
     </div>
   </div>
 
@@ -14,13 +13,13 @@
       <label for="program">Program</label>
       <select id="program" name="program" onchange="window.location='{% url 'dashboard' %}?program='+this.value">{% for choice in available_programs %}<option value="{{ choice.pk }}" {% if choice.pk == program.pk %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}</select>
     {% endif %}
-    <label for="date">Operational date</label>
-    <p class="field-help">For Night, use the date on which the shift starts.</p>
-    <input id="date" name="date" type="date" value="{{ operational_date|date:'Y-m-d' }}" required>
+    <label for="date">Date</label>
+    <p class="field-help">For Night shifts, use the date on which the shift starts.</p>
+    <input id="date" name="date" type="date" value="{{ operational_date|date:'Y-m-d' }}" min="{{ earliest_operational_date|date:'Y-m-d' }}" max="{{ latest_operational_date|date:'Y-m-d' }}" required>
 
-    <label for="staff">Staff member</label>
+    <label for="staff">Staff</label>
     <select id="staff" name="staff" required>
-      <option value="">Select staff member</option>
+      <option value="">Select Staff</option>
       {% for staff in staff_members %}<option value="{{ staff.pk }}" {% if staff.pk == selected_staff_id %}selected{% endif %}>{{ staff.display_name }}</option>{% endfor %}
     </select>
 
@@ -34,7 +33,7 @@
       {% for definition in selected_definitions %}<option value="{{ definition.shift_id }}" {% if definition.shift_id == selected_shift_id %}selected{% endif %}>{{ definition.shift.name }}</option>{% endfor %}
     </select>
 
-    <button class="button primary" type="submit">Open shared checklist</button>
+    <button class="button primary" type="submit">Select Shift</button>
   </form>
 
   {{ shift_options_by_category|json_script:"position-shift-options" }}

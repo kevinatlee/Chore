@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% load checklist_display %}
-{% block title %}{{ instance.category_name_snapshot }} · {{ instance.shift_name_snapshot }} · Chore{% endblock %}
+{% block title %}{{ instance.category_name_snapshot }} Chore List · {{ instance.shift_name_snapshot }} · Chore{% endblock %}
 {% block content %}
-  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}&staff={{ staff_member.pk }}&category={{ instance.category_id }}&shift={{ instance.shift_id }}">← Checklist selector</a>
+  <a class="back-link" href="{% url 'dashboard' %}?date={{ instance.operational_date|date:'Y-m-d' }}&staff={{ staff_member.pk }}&category={{ instance.category_id }}&shift={{ instance.shift_id }}">← Chore List selection</a>
   <div class="checklist-heading">
     <div>
-      <p class="eyebrow">Shared operational checklist</p>
+      <p class="eyebrow">Shared operational Chore List</p>
       <h1>{{ instance.category_name_snapshot }}</h1>
       <p class="checklist-meta">
         <strong>{{ instance.operational_date|date:"l, F j, Y" }}</strong>

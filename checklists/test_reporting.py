@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 from io import StringIO
 
 from django.contrib.auth import get_user_model
@@ -390,6 +390,23 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.client.force_login(self.manager_a)
         response = self.client.get(reverse("reports"), {"date": self.operational_date})
         self.assertContains(response, 'class="report-filters"')
+        self.assertContains(response, 'class="report-filter-row report-filter-row-primary"')
+        self.assertContains(response, 'class="report-filter-row report-filter-row-secondary"')
+        content = response.content.decode()
+        primary_start = content.index("report-filter-row-primary")
+        secondary_start = content.index("report-filter-row-secondary")
+        primary = content[primary_start:secondary_start]
+        secondary = content[secondary_start:content.index("</form>", secondary_start)]
+        self.assertLess(primary.index("Period"), primary.index("Date"))
+        self.assertLess(primary.index("Date"), primary.index("Completion"))
+        self.assertLess(primary.index("Completion"), primary.index("Section"))
+        self.assertLess(secondary.index("Position"), secondary.index("Shift"))
+        self.assertLess(secondary.index("Shift"), secondary.index("Staff"))
+        self.assertLess(secondary.index("Staff"), secondary.index("Apply filters"))
+        self.assertLess(secondary.index("Apply filters"), secondary.index("Reset"))
+        self.assertContains(response, "<h1>Chore Reports</h1>", html=True)
+        self.assertContains(response, '<option value="">All shifts</option>', html=True)
+        self.assertNotContains(response, "All valid shifts")
         self.assertContains(response, 'name="section"')
         for label in ("Period", "Date", "Position", "Shift", "Staff", "Completion", "Section"):
             self.assertContains(response, f"<label>{label}", html=False)
@@ -418,9 +435,46 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.assertNotContains(legacy, "month=2024-02")
         with open("checklists/static/checklists/styles.css", encoding="utf-8") as stylesheet:
             css = stylesheet.read()
-        self.assertIn("minmax(min(12rem, 100%), 1fr)", css)
-        self.assertIn(".report-filters > * { min-width: 0; }", css)
+        self.assertIn(".report-filter-row-primary { grid-template-columns: repeat(4, minmax(0, 1fr)); }", css)
+        self.assertIn(".report-filter-row-secondary { grid-template-columns: repeat(3, minmax(0, 1fr)) auto;", css)
+        self.assertIn(".report-filters > *, .report-filter-row > * { min-width: 0; }", css)
+        self.assertIn(".report-filter-row-primary, .report-filter-row-secondary { grid-template-columns: 1fr; }", css)
         self.assertIn("max-width: 100%", css)
+
+    def test_full_year_mock_history_remains_reportable_to_manager_and_admin(self):
+        historical_date = self.operational_date - timedelta(days=364)
+        instance = resolve_checklist(self.definition_a, historical_date)
+        instance.is_mock_data = True
+        instance.save(update_fields=("is_mock_data",))
+        change_item_state(
+            item_id=instance.items.get(source_task=self.regular_a).pk,
+            actor=None,
+            staff_member=self.staff_a,
+            new_state=TaskState.COMPLETED,
+            system=True,
+        )
+        params = {"period": "daily", "date": historical_date.isoformat()}
+
+        self.client.force_login(self.manager_a)
+        manager_response = self.client.get(reverse("reports"), params)
+        self.assertEqual(manager_response.status_code, 200)
+        self.assertContains(manager_response, historical_date.isoformat())
+        rolling_response = self.client.get(
+            reverse("reports"),
+            {"period": "rolling365", "date": self.operational_date.isoformat()},
+        )
+        self.assertEqual(rolling_response.status_code, 200)
+        self.assertContains(rolling_response, historical_date.isoformat())
+
+        admin = get_user_model().objects.create_superuser(
+            "historical-admin", "historical-admin@example.com", "password"
+        )
+        self.client.force_login(admin)
+        admin_response = self.client.get(
+            reverse("reports"), {**params, "program": self.program_a.pk}
+        )
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertContains(admin_response, historical_date.isoformat())
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -485,10 +539,12 @@ class RetentionTests(ReportingFixtureMixin, TestCase):
     def test_boundary_retained_older_operational_data_purged(self):
         boundary = resolve_checklist(self.definition_a, date(2019, 9, 16))
         older = resolve_checklist(self.definition_a, date(2019, 9, 15))
-        self.contribute(
-            older.items.get(source_task=self.regular_a),
-            self.staff_a,
-            TaskState.COMPLETED,
+        change_item_state(
+            item_id=older.items.get(source_task=self.regular_a).pk,
+            actor=None,
+            staff_member=self.staff_a,
+            new_state=TaskState.COMPLETED,
+            system=True,
         )
         for configured_object in (
             self.category_a,

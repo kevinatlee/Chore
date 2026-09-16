@@ -17,6 +17,7 @@ from .models import (
     StaffMember,
     TaskState,
 )
+from .operational_dates import operational_entry_bounds, validate_operational_entry_date
 from .services import (
     can_operate_program,
     change_item_state,
@@ -34,6 +35,10 @@ def _selected_date(request):
         return date.fromisoformat(raw_date)
     except ValueError as exc:
         raise ValidationError("Use a valid date in YYYY-MM-DD format.") from exc
+
+
+def _selected_operational_date(request):
+    return validate_operational_entry_date(_selected_date(request))
 
 
 @login_required
@@ -59,10 +64,9 @@ def dashboard(request):
     if program is None:
         raise PermissionDenied("Operational-entry access is required.")
     try:
-        operational_date = _selected_date(request)
+        operational_date = _selected_operational_date(request)
     except ValidationError as exc:
-        messages.error(request, " ".join(exc.messages))
-        operational_date = timezone.localdate()
+        return HttpResponseBadRequest(" ".join(exc.messages))
 
     definitions = ChecklistDefinition.objects.filter(
         is_active=True,
@@ -111,6 +115,7 @@ def dashboard(request):
         if requested_shift_id in valid_shift_ids
         else next(iter(valid_shift_ids), None)
     )
+    earliest_operational_date, latest_operational_date = operational_entry_bounds()
     return render(
         request,
         "checklists/dashboard.html",
@@ -118,6 +123,8 @@ def dashboard(request):
             "available_programs": available_programs,
             "program": program,
             "operational_date": operational_date,
+            "earliest_operational_date": earliest_operational_date,
+            "latest_operational_date": latest_operational_date,
             "staff_members": staff_members,
             "selected_staff_id": selected_staff_id,
             "categories": categories,
@@ -133,7 +140,7 @@ def dashboard(request):
 @login_required
 def open_checklist(request):
     try:
-        operational_date = _selected_date(request)
+        operational_date = _selected_operational_date(request)
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
     definition = get_object_or_404(
@@ -179,7 +186,7 @@ def checklist_detail(request, definition_id):
         is_active=True,
     )
     try:
-        operational_date = _selected_date(request)
+        operational_date = _selected_operational_date(request)
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
 
@@ -279,7 +286,7 @@ def report_detail(request, instance_id):
     report = _report_for_request(request)
     report["row"] = next((row for row in report["rows"] if row["id"] == instance_id), None)
     if report["row"] is None:
-        raise PermissionDenied("This checklist is outside the authorized report.")
+        raise PermissionDenied("This Chore List is outside the authorized report.")
     return render(request, "checklists/report_detail.html", report)
 
 
@@ -306,7 +313,7 @@ def report_csv(request):
             "N/A tasks",
             "Pending tasks",
             "Completion percentage",
-            "Checklist contributors",
+            "Chore List staff",
             "Section",
             "Task",
             "Task state",

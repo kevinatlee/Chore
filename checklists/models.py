@@ -172,11 +172,11 @@ class ChecklistDefinition(ActiveOrderedModel):
         errors = {}
         if original["category_id"] != self.category_id:
             errors["category"] = (
-                "Position cannot change after this definition has operational checklists."
+                "Position cannot change after this definition has operational Chore Lists."
             )
         if original["shift_id"] != self.shift_id:
             errors["shift"] = (
-                "Shift cannot change after this definition has operational checklists."
+                "Shift cannot change after this definition has operational Chore Lists."
             )
         if errors:
             raise ValidationError(errors)
@@ -330,11 +330,11 @@ class ChecklistInstance(models.Model):
         definition = self.definition
         errors = {}
         if self.category_id and definition.category_id != self.category_id:
-            errors["category"] = "Position must match the checklist definition."
+            errors["category"] = "Position must match the Chore List definition."
         if self.shift_id and definition.shift_id != self.shift_id:
-            errors["shift"] = "Shift must match the checklist definition."
+            errors["shift"] = "Shift must match the Chore List definition."
         if self.program_id and definition.category.program_id != self.program_id:
-            errors["program"] = "Program must match the checklist position."
+            errors["program"] = "Program must match the Chore List position."
         if errors:
             raise ValidationError(errors)
 

@@ -516,6 +516,15 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
     def test_selector_is_compact_dropdown_workflow_using_staff_records(self):
         self.client.force_login(self.operator)
         response = self.client.get(reverse("dashboard"))
+        self.assertContains(response, self.program.name.upper())
+        self.assertContains(response, "<h1>Select your Shift</h1>", html=True)
+        self.assertContains(response, "For Night shifts, use the date on which the shift starts.")
+        self.assertNotContains(response, "Choose an operational date")
+        self.assertNotContains(response, "Operational date")
+        self.assertContains(response, '<option value="">Select Staff</option>', html=True)
+        self.assertContains(response, '<button class="button primary" type="submit">Select Shift</button>', html=True)
+        self.assertContains(response, 'min="2026-09-09"')
+        self.assertContains(response, 'max="2026-09-16"')
         self.assertContains(response, 'name="staff"')
         self.assertContains(response, "Alfred Sampare")
         self.assertContains(response, 'name="category"')
@@ -523,6 +532,14 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertNotContains(response, "Staff category")
         self.assertContains(response, 'name="shift"')
         self.assertNotContains(response, "definition-card")
+
+    def test_user_facing_navigation_uses_chore_list_while_domain_names_remain_stable(self):
+        self.client.force_login(self.operator)
+        response = self.client.get(reverse("dashboard"))
+        self.assertContains(response, ">Chore Lists</a>")
+        self.assertNotContains(response, ">Checklists</a>")
+        self.assertEqual(ChecklistDefinition.__name__, "ChecklistDefinition")
+        self.assertEqual(ChecklistInstance.__name__, "ChecklistInstance")
 
     def test_staff_and_date_survive_position_and_shift_selection(self):
         evening = Shift.objects.create(
@@ -666,6 +683,116 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertNotContains(response, "Use your staff account")
 
 
+class OperationalDateWindowTests(OperationalFixtureMixin, TestCase):
+    today = date(2026, 9, 16)
+
+    def setUp(self):
+        super().setUp()
+        self.localdate = patch(
+            "checklists.operational_dates.timezone.localdate", return_value=self.today
+        )
+        self.localdate.start()
+        self.addCleanup(self.localdate.stop)
+        self.client.force_login(self.operator)
+
+    def selector_params(self, operational_date):
+        return {
+            "date": operational_date.isoformat(),
+            "staff": self.staff_a.pk,
+            "category": self.category.pk,
+            "shift": self.shift.pk,
+        }
+
+    def test_today_and_exactly_seven_days_ago_are_accepted(self):
+        for operational_date in (self.today, self.today - timedelta(days=7)):
+            with self.subTest(operational_date=operational_date):
+                response = self.client.get(
+                    reverse("open-checklist"), self.selector_params(operational_date)
+                )
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(
+                    ChecklistInstance.objects.filter(
+                        definition=self.definition,
+                        operational_date=operational_date,
+                    ).exists()
+                )
+
+    def test_future_and_eight_days_ago_are_rejected(self):
+        for operational_date in (self.today + timedelta(days=1), self.today - timedelta(days=8)):
+            with self.subTest(operational_date=operational_date):
+                dashboard = self.client.get(
+                    reverse("dashboard"), {"date": operational_date.isoformat()}
+                )
+                response = self.client.get(
+                    reverse("open-checklist"), self.selector_params(operational_date)
+                )
+                self.assertEqual(dashboard.status_code, 400)
+                self.assertEqual(response.status_code, 400)
+                self.assertFalse(
+                    ChecklistInstance.objects.filter(
+                        definition=self.definition,
+                        operational_date=operational_date,
+                    ).exists()
+                )
+
+    def test_crafted_historical_detail_and_update_are_rejected_without_mutation(self):
+        historical_date = self.today - timedelta(days=8)
+        instance = resolve_checklist(self.definition, historical_date)
+        item = instance.items.get(source_task=self.regular)
+        change_item_state(
+            item_id=item.pk,
+            actor=None,
+            staff_member=self.staff_a,
+            new_state=TaskState.COMPLETED,
+            system=True,
+        )
+        before = list(
+            item.contributions.values_list("previous_state", "new_state", "staff_id")
+        )
+
+        detail = self.client.get(
+            reverse("checklist-detail", args=(self.definition.pk,)),
+            {"date": historical_date.isoformat(), "staff": self.staff_a.pk},
+        )
+        update = self.client.post(
+            reverse("update-item-state", args=(item.pk,)),
+            {"state": TaskState.PENDING, "staff": self.staff_a.pk},
+        )
+        self.assertEqual(detail.status_code, 400)
+        self.assertEqual(update.status_code, 400)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, TaskState.COMPLETED)
+        self.assertEqual(
+            list(item.contributions.values_list("previous_state", "new_state", "staff_id")),
+            before,
+        )
+
+    def test_night_operational_date_is_the_selected_shift_start_date(self):
+        night = Shift.objects.create(
+            name="Night", start_time=time(23), end_time=time(7), sort_order=30
+        )
+        night_definition = ChecklistDefinition.objects.create(
+            name="Support Night Checklist",
+            category=self.category,
+            shift=night,
+            sort_order=30,
+        )
+        response = self.client.get(
+            reverse("open-checklist"),
+            {
+                "date": self.today.isoformat(),
+                "staff": self.staff_a.pk,
+                "category": self.category.pk,
+                "shift": night.pk,
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            ChecklistInstance.objects.get(definition=night_definition).operational_date,
+            self.today,
+        )
+
+
 class SimpleOperationalSeedTests(TestCase):
     def test_fresh_seed_accepts_simple_hashed_operational_password(self):
         with patch.dict(os.environ, {"CHORE_OPERATIONAL_PASSWORD": "123"}, clear=False):
@@ -719,9 +846,12 @@ class SeedCorrectionTests(TestCase):
         self.assertFalse(Shift.objects.filter(start_time=time(8), end_time=time(15)).exists())
         self.assertTrue(Shift.objects.get(name="Night").crosses_midnight)
         self.client.force_login(get_user_model().objects.get(username="sonderhouse"))
+        dashboard = self.client.get(reverse("dashboard"))
+        self.assertContains(dashboard, "SONDER HOUSE")
+        self.assertNotContains(dashboard, "SONDER HOUSE OPERATIONS")
         self.assertContains(
-            self.client.get(reverse("dashboard")),
-            "For Night, use the date on which the shift starts.",
+            dashboard,
+            "For Night shifts, use the date on which the shift starts.",
         )
 
     def test_seed_matches_source_configuration_and_life_skills_use_morning(self):

@@ -13,6 +13,7 @@ from .models import (
     StaffMember,
     TaskState,
 )
+from .operational_dates import validate_operational_entry_date
 
 
 SQLITE_LOCK_ATTEMPTS = 5
@@ -61,9 +62,9 @@ def _configuration_is_active(definition):
 
 
 def resolve_checklist(definition, operational_date):
-    """Return the single shared checklist, lazily snapshotting it when first opened."""
+    """Return the single shared Chore List, lazily snapshotting it when first opened."""
     if not _configuration_is_active(definition):
-        raise PermissionDenied("This checklist configuration is inactive.")
+        raise PermissionDenied("This Chore List configuration is inactive.")
     lookup = {
         "program": definition.category.program,
         "operational_date": operational_date,
@@ -123,7 +124,7 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
     ):
         raise PermissionDenied("An active application account is required.")
     if new_state not in TaskState.values:
-        raise ValidationError({"state": "Unknown checklist state."})
+        raise ValidationError({"state": "Unknown task state."})
 
     def write():
         with transaction.atomic():
@@ -140,19 +141,21 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
                 .get(pk=item_id)
             )
             definition = item.instance.definition
+            if not system:
+                validate_operational_entry_date(item.instance.operational_date)
             configuration_is_active = (
                 _configuration_is_active(definition)
                 and item.source_task.is_active
                 and item.source_task.section.is_active
             )
             if not configuration_is_active:
-                raise PermissionDenied("This checklist configuration is inactive.")
+                raise PermissionDenied("This Chore List configuration is inactive.")
             if (
                 definition.category_id != item.instance.category_id
                 or definition.shift_id != item.instance.shift_id
                 or definition.category.program_id != item.instance.program_id
             ):
-                raise PermissionDenied("Checklist configuration identity is inconsistent.")
+                raise PermissionDenied("Chore List configuration identity is inconsistent.")
             if not system:
                 operational_access = actor.program_memberships.filter(
                     program_id=item.instance.program_id,

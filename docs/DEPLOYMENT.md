@@ -67,11 +67,12 @@ container port `8000`, persist `/mnt/user/appdata/Chore` at `/app/data`, use the
 Docker JSON log files. Supply `APP_FQDN`, a long random `DJANGO_SECRET_KEY`, Gmail SMTP
 values, and `DEFAULT_FROM_EMAIL` before applying the template.
 
-The template intentionally has no LAN HTTP WebUI link because Unraid templates cannot
-substitute `APP_FQDN` into that field. Production access remains the configured
-`https://APP_FQDN` through Cloudflare Tunnel. Do not disable HTTPS redirects or secure
-cookies to make `http://UNRAID-IP:4523` an application access path. The existing Docker
-Compose deployment below remains fully supported.
+The template's WebUI button opens the canonical production URL, `https://chore.cc`, and
+its versioned icon is `assets/chore-icon.png`. Production access remains HTTPS through
+Cloudflare Tunnel; port `4523` is the tunnel origin, not a direct application WebUI. Do
+not disable HTTPS redirects or secure cookies to make `http://UNRAID-IP:4523` an
+application access path. The existing Docker Compose deployment below remains fully
+supported.
 
 ## Required environment
 

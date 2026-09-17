@@ -9,7 +9,8 @@
   <Project>https://github.com/kevinatlee/Chore</Project>
   <Support>https://github.com/kevinatlee/Chore/issues</Support>
   <TemplateURL>https://raw.githubusercontent.com/kevinatlee/Chore/main/unraid/my-Chore.xml</TemplateURL>
-  <WebUI/>
+  <Icon>https://raw.githubusercontent.com/kevinatlee/Chore/main/assets/chore-icon.png</Icon>
+  <WebUI>https://chore.cc</WebUI>
   <Overview>Production Chore deployment. Access the application through the HTTPS hostname configured by APP_FQDN and the Cloudflare Tunnel. Direct LAN HTTP is intentionally not configured as the WebUI.</Overview>
   <ExtraParams>--restart=unless-stopped --log-driver=json-file --log-opt=max-size=10m --log-opt=max-file=3</ExtraParams>
 

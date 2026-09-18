@@ -1,12 +1,14 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time
+from threading import Barrier
 
 from django.contrib.auth import authenticate, get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core import mail
 from django.core.management import call_command
-from django.db import IntegrityError, transaction
-from django.test import TestCase, override_settings
+from django.db import IntegrityError, close_old_connections, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from .models import (
@@ -197,6 +199,56 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
             ["Alice revised explanation", "Bob explanation"],
         )
 
+    def test_discrepancy_authorization_rejects_cross_program_actor_and_staff(self):
+        instance = resolve_checklist(self.assignment, self.operational_date)
+        other_program = Program.objects.create(name="Other Program", slug="other-program")
+        outsider = get_user_model().objects.create_user(
+            "outsider5", password="phase-five-password"
+        )
+        ProgramMembership.objects.create(
+            user=outsider, program=other_program, role=ProgramRole.OPERATIONAL
+        )
+        other_staff = StaffMember.objects.create(
+            program=other_program, first_name="Other", last_name="Worker"
+        )
+
+        with self.assertRaises(PermissionDenied):
+            save_discrepancy_explanation(
+                instance=instance,
+                actor=outsider,
+                staff_member=self.staff_a,
+                explanation="Unauthorized actor",
+            )
+        with self.assertRaises(PermissionDenied):
+            save_discrepancy_explanation(
+                instance=instance,
+                actor=self.operator,
+                staff_member=other_staff,
+                explanation="Unauthorized staff context",
+            )
+        with self.assertRaises(PermissionDenied):
+            save_discrepancy_explanation(
+                instance=instance,
+                actor=self.manager,
+                staff_member=self.staff_a,
+                explanation="Managers cannot make operational entries",
+            )
+
+        self.client.force_login(outsider)
+        response = self.client.post(
+            reverse("update-discrepancy", args=(instance.pk,)),
+            {"staff": self.staff_a.pk, "explanation": "HTTP unauthorized actor"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+        self.client.force_login(self.operator)
+        response = self.client.post(
+            reverse("update-discrepancy", args=(instance.pk,)),
+            {"staff": other_staff.pk, "explanation": "HTTP unauthorized staff"},
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(DiscrepancyExplanation.objects.exists())
+
     def test_programming_completion_note_is_required_atomic_and_persistent(self):
         instance = resolve_checklist(self.assignment, self.operational_date)
         item = instance.items.get(source_task=self.programming_task)
@@ -229,6 +281,200 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
         self.assertEqual(
             report_task["contributions"][0]["activity_text"],
             "Community meal preparation",
+        )
+
+
+class ConcurrentDiscrepancyTests(Phase5FixtureMixin, TransactionTestCase):
+    reset_sequences = True
+
+    def _run_together(self, operations):
+        barrier = Barrier(len(operations))
+
+        def run(operation):
+            close_old_connections()
+            try:
+                barrier.wait()
+                return operation()
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=len(operations)) as executor:
+            futures = [executor.submit(run, operation) for operation in operations]
+            return [future.result(timeout=15) for future in futures]
+
+    def _update(self, instance_id, staff_id, explanation):
+        def operation():
+            return save_discrepancy_explanation(
+                instance=ChecklistInstance.objects.get(pk=instance_id),
+                actor=get_user_model().objects.get(pk=self.operator.pk),
+                staff_member=StaffMember.objects.get(pk=staff_id),
+                explanation=explanation,
+            ).pk
+
+        return operation
+
+    def test_concurrent_updates_preserve_contributor_isolation_and_single_row_safety(self):
+        instance = resolve_checklist(self.assignment, self.operational_date)
+        save_discrepancy_explanation(
+            instance=instance,
+            actor=self.operator,
+            staff_member=self.staff_a,
+            explanation="Alice initial",
+        )
+        save_discrepancy_explanation(
+            instance=instance,
+            actor=self.operator,
+            staff_member=self.staff_b,
+            explanation="Bob initial",
+        )
+
+        self._run_together(
+            (
+                self._update(instance.pk, self.staff_a.pk, "Alice concurrent update"),
+                self._update(instance.pk, self.staff_b.pk, "Bob concurrent update"),
+            )
+        )
+        self.assertEqual(
+            DiscrepancyExplanation.objects.get(instance=instance, staff=self.staff_a).explanation,
+            "Alice concurrent update",
+        )
+        self.assertEqual(
+            DiscrepancyExplanation.objects.get(instance=instance, staff=self.staff_b).explanation,
+            "Bob concurrent update",
+        )
+
+        self._run_together(
+            (
+                self._update(instance.pk, self.staff_a.pk, "Alice race one"),
+                self._update(instance.pk, self.staff_a.pk, "Alice race two"),
+            )
+        )
+        self.assertEqual(
+            DiscrepancyExplanation.objects.filter(instance=instance, staff=self.staff_a).count(),
+            1,
+        )
+        self.assertIn(
+            DiscrepancyExplanation.objects.get(instance=instance, staff=self.staff_a).explanation,
+            {"Alice race one", "Alice race two"},
+        )
+        self.assertEqual(
+            DiscrepancyExplanation.objects.get(instance=instance, staff=self.staff_b).explanation,
+            "Bob concurrent update",
+        )
+        self.assertEqual(DiscrepancyExplanation.objects.filter(instance=instance).count(), 2)
+
+
+class RoleAndAdminAuthorizationTests(Phase5FixtureMixin, TestCase):
+    def test_manager_can_view_contributor_audit_but_cannot_make_operational_entries(self):
+        instance = resolve_checklist(self.assignment, self.operational_date)
+        item = instance.items.get(source_task=self.normal_task)
+        change_item_state(
+            item_id=item.pk,
+            actor=self.operator,
+            staff_member=self.staff_b,
+            new_state=TaskState.COMPLETED,
+        )
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("report-detail", args=(instance.pk,)))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.staff_b.display_name)
+        self.assertContains(response, "Latest production contribution by")
+
+        response = self.client.post(
+            reverse("update-item-state", args=(item.pk,)),
+            {"state": TaskState.PENDING, "staff": self.staff_a.pk},
+        )
+        self.assertEqual(response.status_code, 403)
+        item.refresh_from_db()
+        self.assertEqual(item.current_state, TaskState.COMPLETED)
+        self.assertEqual(item.current_staff, self.staff_b)
+
+    def test_admin_can_manage_reusable_relationships_from_both_sides(self):
+        self.client.force_login(self.admin)
+        task_response = self.client.get(
+            reverse("admin:checklists_taskdefinition_change", args=(self.normal_task.pk,))
+        )
+        self.assertEqual(task_response.status_code, 200)
+        self.assertContains(task_response, "Section memberships")
+        self.assertContains(task_response, "section_memberships-TOTAL_FORMS")
+
+        section_response = self.client.get(
+            reverse("admin:checklists_checklistsection_change", args=(self.section.pk,))
+        )
+        self.assertEqual(section_response.status_code, 200)
+        self.assertContains(section_response, "Ordered tasks")
+        self.assertContains(section_response, "task_memberships-TOTAL_FORMS")
+        self.assertContains(section_response, "Shift assignment memberships")
+        self.assertContains(section_response, "assignment_memberships-TOTAL_FORMS")
+
+        assignment_response = self.client.get(
+            reverse("admin:checklists_checklistdefinition_change", args=(self.assignment.pk,))
+        )
+        self.assertEqual(assignment_response.status_code, 200)
+        self.assertContains(assignment_response, "Ordered sections")
+        self.assertContains(assignment_response, "section_memberships-TOTAL_FORMS")
+
+        task_from_admin = TaskDefinition.objects.create(label="Admin reusable task")
+        response = self.client.post(
+            reverse(
+                "admin:checklists_taskdefinition_change", args=(task_from_admin.pk,)
+            ),
+            {
+                "label": task_from_admin.label,
+                "is_active": "on",
+                "section_memberships-TOTAL_FORMS": "1",
+                "section_memberships-INITIAL_FORMS": "0",
+                "section_memberships-MIN_NUM_FORMS": "0",
+                "section_memberships-MAX_NUM_FORMS": "1000",
+                "section_memberships-0-section": str(self.section.pk),
+                "section_memberships-0-sort_order": "30",
+                "_save": "Save",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            SectionTaskMembership.objects.filter(
+                section=self.section, task=task_from_admin, sort_order=30
+            ).exists()
+        )
+
+        section_from_admin = ChecklistSection.objects.create(
+            name="Admin reusable section", sort_order=90
+        )
+        reverse_task = TaskDefinition.objects.create(label="Admin reverse task")
+        response = self.client.post(
+            reverse(
+                "admin:checklists_checklistsection_change", args=(section_from_admin.pk,)
+            ),
+            {
+                "name": section_from_admin.name,
+                "sort_order": "90",
+                "is_active": "on",
+                "task_memberships-TOTAL_FORMS": "1",
+                "task_memberships-INITIAL_FORMS": "0",
+                "task_memberships-MIN_NUM_FORMS": "0",
+                "task_memberships-MAX_NUM_FORMS": "1000",
+                "task_memberships-0-sort_order": "10",
+                "task_memberships-0-task": str(reverse_task.pk),
+                "assignment_memberships-TOTAL_FORMS": "1",
+                "assignment_memberships-INITIAL_FORMS": "0",
+                "assignment_memberships-MIN_NUM_FORMS": "0",
+                "assignment_memberships-MAX_NUM_FORMS": "1000",
+                "assignment_memberships-0-assignment": str(self.assignment.pk),
+                "assignment_memberships-0-sort_order": "20",
+                "_save": "Save",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            SectionTaskMembership.objects.filter(
+                section=section_from_admin, task=reverse_task, sort_order=10
+            ).exists()
+        )
+        self.assertTrue(
+            AssignmentSectionMembership.objects.filter(
+                assignment=self.assignment, section=section_from_admin, sort_order=20
+            ).exists()
         )
 
 

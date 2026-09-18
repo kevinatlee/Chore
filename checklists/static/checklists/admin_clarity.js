@@ -10,7 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
   form.addEventListener("submit", event => {
     if (wasActive && activeField && !activeField.checked) {
       const confirmed = window.confirm(
-        "Deactivate this configuration for future use? Historical Chore Lists, Staff Contributions, and reports will be preserved."
+        "Deactivate this configuration for future use? Historical Chore Lists, Task Entries, and reports will be preserved."
       );
       if (!confirmed) {
         event.preventDefault();

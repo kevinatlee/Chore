@@ -128,6 +128,64 @@ class LoginAndReusableConfigurationTests(Phase5FixtureMixin, TestCase):
         )
 
 
+class AdminUserCreationCompatibilityTests(Phase5FixtureMixin, TestCase):
+    password = "Admin-hotfix-password-42"
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+        self.add_url = reverse("admin:auth_user_add")
+
+    def test_admin_user_add_form_includes_password_controls(self):
+        response = self.client.get(self.add_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="username"')
+        self.assertContains(response, 'name="usable_password"')
+        self.assertContains(response, 'name="password1"')
+        self.assertContains(response, 'name="password2"')
+
+    def test_admin_can_create_user_with_usable_password(self):
+        response = self.client.post(
+            self.add_url,
+            {
+                "username": "AdminCreatedUser",
+                "usable_password": "true",
+                "password1": self.password,
+                "password2": self.password,
+                "_save": "Save",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        created = get_user_model().objects.get(username="AdminCreatedUser")
+        self.assertTrue(created.has_usable_password())
+        self.assertTrue(created.check_password(self.password))
+
+    def test_admin_rejects_username_that_differs_only_by_case(self):
+        response = self.client.post(
+            self.add_url,
+            {
+                "username": "jsmith",
+                "usable_password": "true",
+                "password1": self.password,
+                "password2": self.password,
+                "_save": "Save",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFormError(
+            response.context["adminform"].form,
+            "username",
+            "A user with this username already exists, regardless of letter case.",
+        )
+        self.assertEqual(
+            get_user_model().objects.filter(username__iexact="JSmith").count(),
+            1,
+        )
+
+
 class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
     def test_staff_page_and_json_do_not_leak_contributor_identity(self):
         instance = resolve_checklist(self.assignment, self.operational_date)

@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib import admin
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import UserChangeForm, UserCreationForm
+from django.contrib.auth.forms import AdminUserCreationForm, UserChangeForm
 from django.contrib.auth.models import Group
 from django.db.models import Count
 
@@ -296,7 +296,7 @@ class CaseInsensitiveUsernameForm(UserChangeForm):
         return username
 
 
-class CaseInsensitiveUsernameCreationForm(UserCreationForm):
+class CaseInsensitiveUsernameCreationForm(AdminUserCreationForm):
     def clean_username(self):
         username = self.cleaned_data["username"]
         if get_user_model().objects.filter(username__iexact=username).exists():

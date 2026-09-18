@@ -9,6 +9,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .models import (
+    AssignmentSectionMembership,
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
@@ -18,6 +19,7 @@ from .models import (
     ProgramRole,
     ReportCadence,
     ScheduledReportDelivery,
+    SectionTaskMembership,
     Shift,
     StaffCategory,
     StaffMember,
@@ -88,15 +90,16 @@ class ReportingFixtureMixin:
         definition = ChecklistDefinition.objects.create(
             name=f"{prefix} checklist", category=category, shift=self.shift
         )
-        section = ChecklistSection.objects.create(
-            definition=definition, name=f"{prefix} section", sort_order=10
+        section = ChecklistSection.objects.create(name=f"{prefix} section", sort_order=10)
+        AssignmentSectionMembership.objects.create(
+            assignment=definition, section=section, sort_order=10
         )
-        regular = TaskDefinition.objects.create(
-            section=section, label=f"{prefix} regular", sort_order=10
-        )
-        optional = TaskDefinition.objects.create(
-            section=section, label=f"{prefix} optional", sort_order=20, allow_na=True
-        )
+        regular = TaskDefinition.objects.create(label=f"{prefix} regular")
+        optional = TaskDefinition.objects.create(label=f"{prefix} optional", allow_na=True)
+        SectionTaskMembership.objects.create(section=section, task=regular, sort_order=10)
+        SectionTaskMembership.objects.create(section=section, task=optional, sort_order=20)
+        regular.fixture_section = section
+        optional.fixture_section = section
         return definition, regular, optional
 
     def report_a(self, **filters):
@@ -142,6 +145,7 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
                     "staff_id": self.staff_a2.pk,
                     "previous_state": TaskState.PENDING,
                     "new_state": TaskState.NOT_APPLICABLE,
+                    "activity_text": "",
                     "created_at": optional_task["contributions"][0]["created_at"],
                 }
             ],
@@ -211,21 +215,19 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
         definition = ChecklistDefinition.objects.create(
             name=f"{prefix} checklist", category=category, shift=shift
         )
-        section = ChecklistSection.objects.create(
-            definition=definition, name=f"{prefix} section", sort_order=10
+        section = ChecklistSection.objects.create(name=f"{prefix} section", sort_order=10)
+        AssignmentSectionMembership.objects.create(
+            assignment=definition, section=section, sort_order=10
         )
-        TaskDefinition.objects.create(section=section, label=f"{prefix} regular", sort_order=10)
+        task = TaskDefinition.objects.create(label=f"{prefix} regular")
+        SectionTaskMembership.objects.create(section=section, task=task, sort_order=10)
         return definition
 
     def test_large_report_does_not_exceed_sqlite_parameter_limit(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
         sources = TaskDefinition.objects.bulk_create(
             [
-                TaskDefinition(
-                    section=self.regular_a.section,
-                    label=f"Scale task {index}",
-                    sort_order=100 + index,
-                )
+                TaskDefinition(label=f"Scale task {index}")
                 for index in range(1000)
             ]
         )
@@ -237,9 +239,9 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
                     section_name_snapshot="Alpha section",
                     section_order_snapshot=10,
                     task_label_snapshot=source.label,
-                    task_order_snapshot=source.sort_order,
+                    task_order_snapshot=100 + index,
                 )
-                for source in sources
+                for index, source in enumerate(sources)
             ]
         )
 
@@ -316,11 +318,13 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         foreign_definition = ChecklistDefinition.objects.create(
             name="Beta evening", category=self.category_b, shift=foreign_shift
         )
-        foreign_section = ChecklistSection.objects.create(
-            definition=foreign_definition, name="Foreign section", sort_order=10
+        foreign_section = ChecklistSection.objects.create(name="Foreign section", sort_order=10)
+        AssignmentSectionMembership.objects.create(
+            assignment=foreign_definition, section=foreign_section, sort_order=10
         )
-        TaskDefinition.objects.create(
-            section=foreign_section, label="Foreign task", sort_order=10
+        foreign_task = TaskDefinition.objects.create(label="Foreign task")
+        SectionTaskMembership.objects.create(
+            section=foreign_section, task=foreign_task, sort_order=10
         )
         shift_tamper = self.client.get(
             reverse("reports"),
@@ -562,7 +566,7 @@ class RetentionTests(ReportingFixtureMixin, TestCase):
             self.category_a,
             self.shift,
             self.definition_a,
-            self.regular_a.section,
+            self.regular_a.fixture_section,
             self.regular_a,
         ):
             configured_object.is_active = False
@@ -576,7 +580,7 @@ class RetentionTests(ReportingFixtureMixin, TestCase):
             self.category_a,
             self.shift,
             self.definition_a,
-            self.regular_a.section,
+            self.regular_a.fixture_section,
             self.regular_a,
         ):
             configured_object.refresh_from_db()

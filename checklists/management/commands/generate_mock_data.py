@@ -10,6 +10,7 @@ from checklists.models import (
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
+    DiscrepancyExplanation,
     Program,
     StaffContribution,
     StaffMember,
@@ -61,8 +62,6 @@ class Command(BaseCommand):
         for day_offset in range(days):
             operational_date = start + timedelta(days=day_offset)
             for definition_index, definition in enumerate(definitions):
-                if definition.category.slug == "life-skills" and operational_date.weekday() >= 5:
-                    continue
                 if ChecklistInstance.objects.filter(
                     program=program,
                     operational_date=operational_date,
@@ -74,7 +73,7 @@ class Command(BaseCommand):
                 instance.is_mock_data = True
                 instance.save(update_fields=("is_mock_data",))
                 created_instances += 1
-                items = list(instance.items.all())
+                items = list(instance.items.select_related("source_task"))
                 created_items += len(items)
                 mode_roll = rng.random()
                 completion_target = 1.0 if mode_roll < 0.56 else rng.uniform(0.3, 0.88)
@@ -110,6 +109,12 @@ class Command(BaseCommand):
                             recorded_by=None,
                             previous_state=TaskState.PENDING,
                             new_state=new_state,
+                            activity_text=(
+                                "Tenant cooking group and meal-planning activity"
+                                if item.requires_completion_note_snapshot
+                                and new_state == TaskState.COMPLETED
+                                else ""
+                            ),
                             created_at=item.state_changed_at,
                         )
                     )
@@ -125,6 +130,18 @@ class Command(BaseCommand):
                         contribution_rows, ("created_at",)
                     )
                     changed_items += len(changed_rows)
+                if rng.random() < 0.35:
+                    for contributor_index, selected_staff in enumerate(contributors):
+                        DiscrepancyExplanation.objects.create(
+                            instance=instance,
+                            staff=selected_staff,
+                            recorded_by=None,
+                            explanation=(
+                                "Follow-up required for supplies and one pending room check."
+                                if contributor_index == 0
+                                else "Shared shift coverage changed the expected task timing."
+                            ),
+                        )
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -141,6 +158,7 @@ class Command(BaseCommand):
         instance_count = instances.count()
         item_ids = ChecklistItem.objects.filter(instance__in=instances).values_list("pk", flat=True)
         contribution_count = StaffContribution.objects.filter(item_id__in=item_ids).count()
+        DiscrepancyExplanation.objects.filter(instance__in=instances).delete()
         StaffContribution.objects.filter(item_id__in=item_ids).delete()
         ChecklistItem.objects.filter(pk__in=item_ids).delete()
         instances.delete()

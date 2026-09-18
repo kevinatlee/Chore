@@ -51,17 +51,20 @@
     status.textContent = item.state_label;
     status.className = `status status-${item.state}`;
     const contributor = card.querySelector("[data-item-contributor]");
-    contributor.textContent = item.staff_name
+    if (contributor) contributor.textContent = item.staff_name
       ? `Staff Contribution by ${item.staff_name}`
       : "No Staff Contribution yet";
     const time = card.querySelector("[data-item-time]");
-    time.hidden = !item.changed_at;
-    time.dateTime = item.changed_at || "";
-    time.textContent = item.changed_at_label || "";
+    if (time) {
+      time.hidden = !item.changed_at;
+      time.dateTime = item.changed_at || "";
+      time.textContent = item.changed_at_label || "";
+    }
     refreshActions(card, item.state);
   };
 
   const refreshContributions = contributions => {
+    if (!contributionList) return;
     contributionList.replaceChildren();
     if (!contributions.length) {
       const empty = document.createElement("li");
@@ -88,7 +91,7 @@
   const applyState = payload => {
     if (!payload.changed) return;
     payload.items.forEach(applyItem);
-    refreshContributions(payload.contributions);
+    refreshContributions(payload.contributions || []);
     resolvedCount.textContent = payload.resolved_count;
     totalCount.textContent = payload.total_count;
     revision = payload.revision;
@@ -120,6 +123,13 @@
     const submitter = event.submitter;
     if (!form || !submitter || !submitter.value) return;
     event.preventDefault();
+    const activity = form.querySelector('[name="activity_text"]');
+    if (submitter.value === "completed" && activity && !activity.value.trim()) {
+      activity.setCustomValidity("Describe the programming activity before completing this task.");
+      activity.reportValidity();
+      return;
+    }
+    if (activity) activity.setCustomValidity("");
     const formData = new FormData(form);
     formData.set("state", submitter.value);
     activeMutations += 1;

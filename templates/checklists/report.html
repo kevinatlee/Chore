@@ -98,25 +98,23 @@
 
   <div class="summary-grid" aria-label="Report summary">
     <div><strong>{{ totals.checklists }}</strong><span>Chore Lists</span></div>
-    <div><strong>{{ totals.completed }}/{{ totals.applicable }}</strong><span>Applicable tasks completed</span></div>
-    <div><strong>{{ totals.na }}</strong><span>N/A</span></div>
-    <div><strong>{{ totals.pending }}</strong><span>Pending</span></div>
-    <div><strong>{{ totals.completion_percentage }}%</strong><span>Completion</span></div>
+    <div><strong>{{ totals.completed }}/{{ totals.applicable }}</strong><span>Tasks</span></div>
+    <div><strong>{{ totals.completion_percentage }}%</strong><span>%</span></div>
   </div>
 
   <div class="table-wrap">
     <table class="report-table">
-      <thead><tr><th class="report-date">Date</th><th>Position</th><th>Shift</th><th>Completion</th><th>Completed</th><th>N/A</th><th>Pending</th><th>Completion rate</th><th>Staff</th><th></th></tr></thead>
+      <thead><tr><th class="report-date">Date</th><th>Position</th><th>Shift</th><th>Completion</th><th>Tasks</th><th>%</th><th>Staff</th><th></th></tr></thead>
       <tbody>
         {% for row in rows %}
           <tr>
             <td class="report-date">{{ row.operational_date|date:"Y-m-d" }}</td><td>{{ row.category }}</td><td>{{ row.shift }}</td>
             <td><span class="status status-{{ row.status }}">{{ row.status|title }}</span></td>
-            <td>{{ row.completed_count }}/{{ row.applicable_count }}</td><td>{{ row.na_count }}</td><td>{{ row.pending_count }}</td><td>{{ row.completion_percentage }}%</td>
+            <td>{{ row.completed_count }}/{{ row.applicable_count }}</td><td>{{ row.completion_percentage }}%</td>
             <td>{% for contributor in row.contributors %}{{ contributor }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}</td>
-            <td><a href="{% url 'report-detail' row.id %}?{{ query_string }}">Drill down</a></td>
+            <td><a href="{% url 'report-detail' row.id %}?{{ query_string }}">Report</a></td>
           </tr>
-        {% empty %}<tr><td colspan="10">No operational Chore Lists match this period and filter set.</td></tr>{% endfor %}
+        {% empty %}<tr><td colspan="8">No operational Chore Lists match this period and filter set.</td></tr>{% endfor %}
       </tbody>
     </table>
   </div>

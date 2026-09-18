@@ -1,8 +1,10 @@
 import csv
+import json
 from datetime import date
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.contrib.admin.views.decorators import staff_member_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -14,17 +16,21 @@ from .models import (
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
+    DiscrepancyExplanation,
     StaffContribution,
     StaffMember,
     TaskState,
 )
 from .operational_dates import operational_entry_bounds, validate_operational_entry_date
 from .presentation import display_task_text
+from .configuration_export import build_configuration_export
 from .services import (
+    can_view_contributor_audit,
     can_operate_program,
     change_item_state,
     programs_for_operations,
     resolve_checklist,
+    save_discrepancy_explanation,
 )
 from .reporting import build_report, period_from_params, programs_for_reporting, selected_program
 
@@ -67,7 +73,7 @@ def _checklist_revision(instance):
     return str(latest_contribution_id or 0)
 
 
-def _checklist_state_payload(instance):
+def _checklist_state_payload(instance, *, include_audit=False):
     items = list(
         instance.items.select_related("current_staff").order_by(
             "section_order_snapshot",
@@ -88,10 +94,11 @@ def _checklist_state_payload(instance):
         "resolved_count": resolved_count,
         "total_count": len(items),
         "items": [
-            {
+            ({
                 "id": item.id,
                 "state": item.current_state,
                 "state_label": item.get_current_state_display(),
+            } | ({
                 "staff_name": item.current_staff.display_name if item.current_staff else "",
                 "changed_at": item.state_changed_at.isoformat() if item.state_changed_at else "",
                 "changed_at_label": (
@@ -101,10 +108,10 @@ def _checklist_state_payload(instance):
                     if item.state_changed_at
                     else ""
                 ),
-            }
+            } if include_audit else {}))
             for item in items
         ],
-        "contributions": [
+        "contributions": ([
             {
                 "id": contribution.id,
                 "staff_name": contribution.staff.display_name,
@@ -117,7 +124,7 @@ def _checklist_state_payload(instance):
                 .replace(" 0", " "),
             }
             for contribution in contributions
-        ],
+        ] if include_audit else []),
     }
 
 
@@ -262,7 +269,8 @@ def checklist_detail(request, definition_id):
         return HttpResponseBadRequest(" ".join(exc.messages))
 
     instance = resolve_checklist(definition, operational_date)
-    items = instance.items.select_related("current_staff").order_by(
+    show_audit = can_view_contributor_audit(request.user, instance.program_id)
+    items = instance.items.select_related("current_staff", "source_task").order_by(
         "section_order_snapshot", "task_order_snapshot", "scheduled_start_snapshot", "id"
     )
     sections = []
@@ -275,7 +283,10 @@ def checklist_detail(request, definition_id):
         StaffContribution.objects.filter(item__instance=instance)
         .select_related("staff", "item")
         .order_by("-created_at", "-id")[:10]
-    )
+    ) if show_audit else StaffContribution.objects.none()
+    discrepancy = DiscrepancyExplanation.objects.filter(
+        instance=instance, staff=staff_member
+    ).first()
     total_count = sum(len(section["items"]) for section in sections)
     completed_count = sum(
         item.current_state != TaskState.PENDING
@@ -289,6 +300,8 @@ def checklist_detail(request, definition_id):
             "instance": instance,
             "sections": sections,
             "contributions": contributions,
+            "discrepancy": discrepancy,
+            "show_audit": show_audit,
             "states": TaskState,
             "total_count": total_count,
             "completed_count": completed_count,
@@ -317,7 +330,12 @@ def checklist_state(request, definition_id):
     revision = _checklist_revision(instance)
     if request.GET.get("revision") == revision:
         return JsonResponse({"changed": False, "revision": revision})
-    return JsonResponse(_checklist_state_payload(instance))
+    return JsonResponse(
+        _checklist_state_payload(
+            instance,
+            include_audit=can_view_contributor_audit(request.user, instance.program_id),
+        )
+    )
 
 
 @login_required
@@ -338,12 +356,20 @@ def update_item_state(request, item_id):
                 is_active=True,
             ),
             new_state=request.POST.get("state", ""),
+            activity_text=request.POST.get("activity_text", ""),
         )
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
 
     if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        return JsonResponse(_checklist_state_payload(changed_item.instance))
+        return JsonResponse(
+            _checklist_state_payload(
+                changed_item.instance,
+                include_audit=can_view_contributor_audit(
+                    request.user, changed_item.instance.program_id
+                ),
+            )
+        )
 
     if contribution:
         messages.success(request, "Task updated and Staff Contribution recorded.")
@@ -351,6 +377,47 @@ def update_item_state(request, item_id):
     return redirect(
         f"{target}?date={item.instance.operational_date.isoformat()}&staff={request.POST.get('staff')}"
     )
+
+
+@login_required
+@require_POST
+def update_discrepancy(request, instance_id):
+    instance = get_object_or_404(
+        ChecklistInstance.objects.select_related("program"), pk=instance_id
+    )
+    staff_member = get_object_or_404(
+        StaffMember,
+        pk=request.POST.get("staff"),
+        program=instance.program,
+        is_active=True,
+    )
+    try:
+        save_discrepancy_explanation(
+            instance=instance,
+            actor=request.user,
+            staff_member=staff_member,
+            explanation=request.POST.get("explanation", ""),
+        )
+    except ValidationError as exc:
+        return HttpResponseBadRequest(" ".join(exc.messages))
+    messages.success(request, "Discrepancy explanation saved for this staff member.")
+    target = reverse("checklist-detail", args=(instance.definition_id,))
+    return redirect(
+        f"{target}?date={instance.operational_date.isoformat()}&staff={staff_member.pk}"
+    )
+
+
+@staff_member_required
+@require_GET
+def export_configuration(request):
+    payload = build_configuration_export()
+    response = HttpResponse(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        content_type="application/json; charset=utf-8",
+    )
+    filename = f"chore-config-{timezone.localdate().isoformat()}.json"
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 def _report_for_request(request):

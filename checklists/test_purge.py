@@ -14,6 +14,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
 from .models import (
+    AssignmentSectionMembership,
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
@@ -23,6 +24,7 @@ from .models import (
     ProgramRole,
     ReportCadence,
     ScheduledReportDelivery,
+    SectionTaskMembership,
     Shift,
     StaffCategory,
     StaffContribution,
@@ -67,15 +69,13 @@ class FreshStartPurgeTests(TestCase):
             shift=self.shift,
             sort_order=10,
         )
-        self.section = ChecklistSection.objects.create(
-            definition=self.definition,
-            name="Office",
-            sort_order=10,
+        self.section = ChecklistSection.objects.create(name="Office", sort_order=10)
+        AssignmentSectionMembership.objects.create(
+            assignment=self.definition, section=self.section, sort_order=10
         )
-        self.task = TaskDefinition.objects.create(
-            section=self.section,
-            label="Test task",
-            sort_order=10,
+        self.task = TaskDefinition.objects.create(label="Test task")
+        SectionTaskMembership.objects.create(
+            section=self.section, task=self.task, sort_order=10
         )
 
         self.instance = resolve_checklist(self.definition, self.operational_date)
@@ -132,7 +132,7 @@ class FreshStartPurgeTests(TestCase):
         self.assertIn("Dry run (fresh start)", output.getvalue())
         self.assertIn(
             "1 non-mock checklist(s), 1 item(s), 1 contribution(s), "
-            "1 scheduled report delivery record(s)",
+            "0 discrepancy explanation(s), 1 scheduled report delivery record(s)",
             output.getvalue(),
         )
         self.assertIn("preserving 1 generated mock checklist(s)", output.getvalue())

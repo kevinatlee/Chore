@@ -1,6 +1,40 @@
-{% load static %}<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>{{ program.name }} Chore Report {{ period.start }}–{{ period.end }}</title><link rel="stylesheet" href="{% static 'checklists/styles.css' %}"><style>.print-report{width:100%;padding:1rem}.print-report table{font-size:10pt}@media print{.no-print{display:none}.print-report{padding:0}body{background:#fff}}</style></head>
-<body><main class="print-report"><button class="button secondary no-print" onclick="window.print()">Print / Save PDF</button><h1>{{ program.name }} Chore Reports</h1><p>{{ period.start|date:"Y-m-d" }} through {{ period.end|date:"Y-m-d" }}</p><p><strong>{{ totals.completion_percentage }}%</strong> completion · {{ totals.completed }}/{{ totals.applicable }} applicable complete · {{ totals.na }} N/A · {{ totals.pending }} pending</p>
-<table class="report-table"><thead><tr><th class="report-date">Date</th><th>Position / shift</th><th>Completion</th><th>Applicable</th><th>Complete</th><th>N/A</th><th>Pending</th><th>Staff</th></tr></thead><tbody>{% for row in rows %}<tr><td class="report-date">{{ row.operational_date|date:"Y-m-d" }}</td><td>{{ row.category }}<br>{{ row.shift }}</td><td>{{ row.status|title }}</td><td>{{ row.applicable_count }}</td><td>{{ row.completed_count }}</td><td>{{ row.na_count }}</td><td>{{ row.pending_count }}</td><td>{% for contributor in row.contributors %}{{ contributor }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}</td></tr>{% empty %}<tr><td colspan="8">No matching operational Chore Lists.</td></tr>{% endfor %}</tbody></table>
-{% for row in rows %}<section><h2>{{ row.operational_date|date:"Y-m-d" }} · {{ row.category }} — {{ row.shift }}</h2><table class="report-table"><thead><tr><th>Section</th><th>Task</th><th>State</th><th>Contribution</th></tr></thead><tbody>{% for task in row.filtered_tasks %}<tr><td>{{ task.section }}</td><td>{{ task.label }}</td><td>{{ task.state_label }}</td><td>{% if task.contributor %}{{ task.contributor }} · {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}None{% endif %}</td></tr>{% endfor %}</tbody></table></section>{% endfor %}
-</main></body></html>
+{% extends "base.html" %}
+{% block title %}{{ program.name }} Chore Report · Chore{% endblock %}
+{% block content %}
+<style>
+  .print-toolbar { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+  .print-segment { margin:2rem 0; }
+  .print-segment .report-table { font-size:10pt; }
+  @media print {
+    @page { margin: 0.55in; }
+    .site-header, .no-print { display:none !important; }
+    .page-shell { width:100%; padding:0; }
+    body { background:#fff; }
+    .print-report-header { margin-bottom:1rem; }
+    .print-segment { break-before:page; page-break-before:always; margin:0; }
+    .print-segment:first-of-type { break-before:auto; page-break-before:auto; }
+    .print-segment:last-child { break-after:auto; page-break-after:auto; }
+    .report-table th, .report-table td { white-space:normal; }
+  }
+</style>
+<div class="print-toolbar no-print">
+  <a class="button secondary" href="{% url 'reports' %}?{{ query_string }}">Report</a>
+  <button class="button primary" type="button" onclick="window.print()">Print / Save PDF</button>
+</div>
+<header class="print-report-header">
+  <p class="eyebrow">{{ program.name }}</p>
+  <h1>Chore Report</h1>
+  <p>{{ period.start|date:"Y-m-d" }} through {{ period.end|date:"Y-m-d" }} · {{ totals.completion_percentage }}% Complete · {{ totals.completed }}/{{ totals.applicable }} Tasks Complete</p>
+</header>
+{% for row in rows %}
+  <section class="print-segment">
+    <h2>{{ row.operational_date|date:"Y-m-d" }} · {{ row.shift }} · {{ row.category }}</h2>
+    <p>{{ row.completed_count }}/{{ row.applicable_count }} Tasks · {{ row.completion_percentage }}%</p>
+    <table class="report-table">
+      <thead><tr><th>Section</th><th>Task</th><th>State</th><th>Task entry</th></tr></thead>
+      <tbody>{% for task in row.filtered_tasks %}<tr><td>{{ task.section }}</td><td>{{ task.label }}</td><td>{{ task.state_label }}</td><td>{% if task.contributor %}{{ task.contributor }} · {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}None{% endif %}{% for entry in task.contributions %}{% if entry.activity_text %}<br><strong>Programming:</strong> {{ entry.activity_text }}{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% if row.discrepancies %}<h3>Discrepancy explanations</h3><ul>{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}:</strong> {{ discrepancy.explanation }}</li>{% endfor %}</ul>{% endif %}
+  </section>
+{% empty %}<div class="empty-state">No matching operational Chore Lists.</div>{% endfor %}
+{% endblock %}

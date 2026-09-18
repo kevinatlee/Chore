@@ -7,6 +7,7 @@ from django.utils import timezone
 from checklists.models import (
     ChecklistInstance,
     ChecklistItem,
+    DiscrepancyExplanation,
     ScheduledReportDelivery,
     StaffContribution,
 )
@@ -62,18 +63,21 @@ class Command(BaseCommand):
         item_ids = ChecklistItem.objects.filter(instance__in=instances).values_list("pk", flat=True)
         item_count = item_ids.count()
         contribution_count = StaffContribution.objects.filter(item_id__in=item_ids).count()
+        discrepancy_count = DiscrepancyExplanation.objects.filter(instance__in=instances).count()
         delivery_count = ScheduledReportDelivery.objects.count() if fresh_start else 0
 
         if fresh_start:
             summary = (
                 f"{instance_count} non-mock checklist(s), {item_count} item(s), "
-                f"{contribution_count} contribution(s), {delivery_count} scheduled report "
+                f"{contribution_count} contribution(s), {discrepancy_count} discrepancy explanation(s), "
+                f"{delivery_count} scheduled report "
                 f"delivery record(s); preserving {mock_count} generated mock checklist(s)"
             )
         else:
             summary = (
                 f"cutoff={cutoff.isoformat()}; {instance_count} non-mock checklist(s), "
-                f"{item_count} item(s), {contribution_count} contribution(s); preserving "
+                f"{item_count} item(s), {contribution_count} contribution(s), "
+                f"{discrepancy_count} discrepancy explanation(s); preserving "
                 f"{mock_count} generated mock checklist(s)"
             )
 
@@ -84,6 +88,7 @@ class Command(BaseCommand):
             return
 
         StaffContribution.objects.filter(item_id__in=item_ids).delete()
+        DiscrepancyExplanation.objects.filter(instance__in=instances).delete()
         ChecklistItem.objects.filter(pk__in=item_ids).delete()
         instances.delete()
         if fresh_start:

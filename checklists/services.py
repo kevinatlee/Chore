@@ -2,13 +2,15 @@ import time
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from .models import (
+    AssignmentSectionMembership,
     ChecklistInstance,
     ChecklistItem,
+    DiscrepancyExplanation,
     ProgramRole,
+    SectionTaskMembership,
     StaffContribution,
     StaffMember,
     TaskState,
@@ -37,6 +39,18 @@ def programs_for_operations(user):
 
 def can_operate_program(user, program_id):
     return programs_for_operations(user).filter(pk=program_id).exists()
+
+
+def can_view_contributor_audit(user, program_id):
+    if not user.is_authenticated or not user.is_active:
+        return False
+    if user.is_superuser:
+        return True
+    return user.program_memberships.filter(
+        program_id=program_id,
+        role=ProgramRole.MANAGER,
+        is_active=True,
+    ).exists()
 
 
 def _run_serialized_write(operation):
@@ -85,25 +99,41 @@ def resolve_checklist(definition, operational_date):
                 },
             )
             if created:
-                sections = definition.sections.filter(is_active=True).order_by(
-                    "sort_order", "id"
+                memberships = (
+                    AssignmentSectionMembership.objects.filter(
+                        assignment=definition,
+                        section__is_active=True,
+                    )
+                    .select_related("section")
+                    .order_by("sort_order", "id")
                 )
                 items = []
-                for section in sections:
-                    tasks = section.tasks.filter(is_active=True).filter(
-                        Q(weekday__isnull=True) | Q(weekday=operational_date.weekday())
+                seen_task_ids = set()
+                for section_membership in memberships:
+                    section = section_membership.section
+                    task_memberships = (
+                        SectionTaskMembership.objects.filter(
+                            section=section,
+                            task__is_active=True,
+                        )
+                        .select_related("task")
+                        .order_by("sort_order", "id")
                     )
-                    for task in tasks.order_by("sort_order", "weekday", "id"):
+                    for task_membership in task_memberships:
+                        task = task_membership.task
+                        if task.pk in seen_task_ids:
+                            continue
+                        seen_task_ids.add(task.pk)
                         items.append(
                             ChecklistItem(
                                 instance=instance,
                                 source_task=task,
                                 section_name_snapshot=section.name,
-                                section_order_snapshot=section.sort_order,
+                                section_order_snapshot=section_membership.sort_order,
                                 task_label_snapshot=task.label,
-                                task_order_snapshot=task.sort_order,
+                                task_order_snapshot=task_membership.sort_order,
                                 allow_na_snapshot=task.allow_na,
-                                weekday_snapshot=task.weekday,
+                                requires_completion_note_snapshot=task.requires_completion_note,
                                 scheduled_start_snapshot=task.scheduled_start,
                                 scheduled_end_snapshot=task.scheduled_end,
                             )
@@ -118,13 +148,16 @@ def resolve_checklist(definition, operational_date):
         return ChecklistInstance.objects.get(**lookup)
 
 
-def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
+def change_item_state(
+    *, item_id, actor, staff_member, new_state, activity_text="", system=False
+):
     if not system and (
         actor is None or not actor.is_authenticated or not actor.is_active
     ):
         raise PermissionDenied("An active application account is required.")
     if new_state not in TaskState.values:
         raise ValidationError({"state": "Unknown task state."})
+    normalized_activity_text = (activity_text or "").strip()
 
     def write():
         with transaction.atomic():
@@ -136,7 +169,7 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
                     "instance__definition__category",
                     "instance__definition__shift",
                     "instance__program",
-                    "source_task__section",
+                    "source_task",
                 )
                 .get(pk=item_id)
             )
@@ -146,7 +179,11 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
             configuration_is_active = (
                 _configuration_is_active(definition)
                 and item.source_task.is_active
-                and item.source_task.section.is_active
+                and SectionTaskMembership.objects.filter(
+                    task=item.source_task,
+                    section__is_active=True,
+                    section__assignment_memberships__assignment=definition,
+                ).exists()
             )
             if not configuration_is_active:
                 raise PermissionDenied("This Chore List configuration is inactive.")
@@ -179,6 +216,14 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
                 )
             if new_state == TaskState.NOT_APPLICABLE and not item.allow_na_snapshot:
                 raise ValidationError({"state": "This task cannot be marked N/A."})
+            if (
+                new_state == TaskState.COMPLETED
+                and item.requires_completion_note_snapshot
+                and not normalized_activity_text
+            ):
+                raise ValidationError(
+                    {"activity_text": "Describe the programming activity before completing this task."}
+                )
             if new_state == item.current_state:
                 return item, None
 
@@ -188,6 +233,12 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
                 recorded_by=None if system else actor,
                 previous_state=item.current_state,
                 new_state=new_state,
+                activity_text=(
+                    normalized_activity_text
+                    if new_state == TaskState.COMPLETED
+                    and item.requires_completion_note_snapshot
+                    else ""
+                ),
             )
             item.current_state = new_state
             item.current_staff = selected_staff
@@ -201,5 +252,34 @@ def change_item_state(*, item_id, actor, staff_member, new_state, system=False):
                 )
             )
             return item, contribution
+
+    return _run_serialized_write(write)
+
+
+def save_discrepancy_explanation(*, instance, actor, staff_member, explanation):
+    if actor is None or not actor.is_authenticated or not actor.is_active:
+        raise PermissionDenied("An active application account is required.")
+    validate_operational_entry_date(instance.operational_date)
+    if not can_operate_program(actor, instance.program_id):
+        raise PermissionDenied("Operational-entry access is required for this Program.")
+    try:
+        selected_staff = StaffMember.objects.get(pk=staff_member.pk)
+    except (AttributeError, StaffMember.DoesNotExist) as exc:
+        raise ValidationError({"staff": "Select a valid staff member."}) from exc
+    if not selected_staff.is_active or selected_staff.program_id != instance.program_id:
+        raise PermissionDenied("The selected staff member is not active in this Program.")
+    explanation = (explanation or "").strip()
+    if not explanation:
+        raise ValidationError({"explanation": "Enter a discrepancy explanation."})
+
+    def write():
+        with transaction.atomic():
+            locked_instance = ChecklistInstance.objects.select_for_update().get(pk=instance.pk)
+            record, _ = DiscrepancyExplanation.objects.update_or_create(
+                instance=locked_instance,
+                staff=selected_staff,
+                defaults={"recorded_by": actor, "explanation": explanation},
+            )
+            return record
 
     return _run_serialized_write(write)

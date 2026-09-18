@@ -10,6 +10,7 @@ from .models import (
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
+    DiscrepancyExplanation,
     Program,
     ProgramRole,
     Shift,
@@ -174,6 +175,19 @@ def build_report(*, program, period, filters=None):
     items_by_instance = defaultdict(list)
     for item in report_items:
         items_by_instance[item.instance_id].append(item)
+    discrepancies_by_instance = defaultdict(list)
+    for discrepancy in DiscrepancyExplanation.objects.filter(
+        instance_id__in=Subquery(instance_ids)
+    ).select_related("staff").order_by("instance_id", "created_at", "id"):
+        discrepancies_by_instance[discrepancy.instance_id].append(
+            {
+                "staff": discrepancy.staff.display_name,
+                "staff_id": discrepancy.staff_id,
+                "explanation": discrepancy.explanation,
+                "created_at": discrepancy.created_at,
+                "updated_at": discrepancy.updated_at,
+            }
+        )
 
     for instance in instances:
         tasks = []
@@ -206,6 +220,7 @@ def build_report(*, program, period, filters=None):
                             "staff_id": contribution.staff_id,
                             "previous_state": contribution.previous_state,
                             "new_state": contribution.new_state,
+                            "activity_text": contribution.activity_text,
                             "created_at": contribution.created_at,
                         }
                         for contribution in production_contributions
@@ -244,6 +259,7 @@ def build_report(*, program, period, filters=None):
             "pending_count": pending,
             "completion_percentage": round((completed / applicable) * 100, 1) if applicable else 100.0,
             "contributors": list(checklist_contributors.values()),
+            "discrepancies": discrepancies_by_instance[instance.pk],
             "tasks": tasks,
             "filtered_tasks": filtered_tasks,
         }
@@ -326,8 +342,24 @@ def report_snapshot(report):
         "totals": report["totals"],
         "checklists": [
             {
-                **{key: value for key, value in row.items() if key not in {"tasks", "filtered_tasks"}},
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"tasks", "filtered_tasks", "discrepancies"}
+                },
                 "operational_date": row["operational_date"].isoformat(),
+                "discrepancies": [
+                    {
+                        **{
+                            key: value
+                            for key, value in discrepancy.items()
+                            if key not in {"created_at", "updated_at"}
+                        },
+                        "created_at": discrepancy["created_at"].isoformat(),
+                        "updated_at": discrepancy["updated_at"].isoformat(),
+                    }
+                    for discrepancy in row["discrepancies"]
+                ],
                 "tasks": [
                     {
                         **{key: value for key, value in task.items() if key not in {"changed_at", "contributions"}},

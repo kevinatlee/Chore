@@ -18,4 +18,9 @@ urlpatterns = [
         name="checklist-state",
     ),
     path("items/<int:item_id>/state/", views.update_item_state, name="update-item-state"),
+    path(
+        "checklists/instances/<int:instance_id>/discrepancy/",
+        views.update_discrepancy,
+        name="update-discrepancy",
+    ),
 ]

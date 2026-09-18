@@ -12,11 +12,12 @@
         {% for task in section.list %}
           <article class="task-card state-{{ task.state }}">
             <div class="task-copy"><h3>{{ task.label }}</h3><p class="task-attribution"><span class="status status-{{ task.state }}">{{ task.state_label }}</span>{% if task.contributor %}Latest production contribution by {{ task.contributor }} at {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}No production contributions{% endif %}</p>
-              {% if task.contributions %}<details><summary>{{ task.contributions|length }} contribution{{ task.contributions|length|pluralize }}</summary><ol class="contribution-list">{% for contribution in task.contributions %}<li>{{ contribution.staff }}: {{ contribution.previous_state|title }} → {{ contribution.new_state|title }} <time>{{ contribution.created_at|date:"Y-m-d H:i:s" }}</time></li>{% endfor %}</ol></details>{% endif %}
+              {% if task.contributions %}<details><summary>{{ task.contributions|length }} contribution{{ task.contributions|length|pluralize }}</summary><ol class="contribution-list">{% for contribution in task.contributions %}<li>{{ contribution.staff }}: {{ contribution.previous_state|title }} → {{ contribution.new_state|title }} <time>{{ contribution.created_at|date:"Y-m-d H:i:s" }}</time>{% if contribution.activity_text %}<p><strong>Programming activity:</strong> {{ contribution.activity_text }}</p>{% endif %}</li>{% endfor %}</ol></details>{% endif %}
             </div>
           </article>
         {% endfor %}
       </div>
     </section>
   {% endfor %}
+  <section class="contribution-panel"><h2>Discrepancy explanations</h2><ol class="contribution-list">{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}</strong> · {{ discrepancy.updated_at|date:"Y-m-d H:i" }}<p>{{ discrepancy.explanation }}</p></li>{% empty %}<li>No discrepancy explanations submitted.</li>{% endfor %}</ol></section>
 {% endblock %}

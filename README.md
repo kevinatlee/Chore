@@ -1,6 +1,6 @@
 # Chore
 
-Chore is a shared operational checklist application for Sonder House. It separates authenticated application accounts from the operational staff roster, provides lazily created shared checklists, records per-task Pending/Completed/N/A state and Staff Contribution history, and supplies Program-scoped operational reporting.
+Chore is a shared operational checklist application for Sonder House. It separates authenticated application accounts from the operational staff roster, provides lazily created shared checklists, records per-task Pending/Completed/N/A state and Task Entry history, and supplies Program-scoped operational reporting. Phase 5 incorporates live-test findings: reusable ordered configuration, staff-facing contributor privacy, discrepancy explanations, programming activity notes, simplified Life Skills scheduling, revised reports, and a portable configuration export.
 
 The important identity rule is enforced in the database: one operational checklist exists for each Program, date, position, and shift. Selecting another staff name changes attribution, never checklist identity.
 
@@ -34,6 +34,8 @@ Open `http://127.0.0.1:8000/` for Chore and `http://127.0.0.1:8000/admin/` for c
 
 Passwords are never stored in the repository. The seed reads `CHORE_OPERATIONAL_PASSWORD`; if absent when the account is first created, the account receives an unusable password. Set the variable and rerun with `--reset-passwords` to enable sign-in. The active shared operational account is exempt from Django's composition, similarity, common-password, and minimum-length checks so its password can be communicated to the team; it is still hashed and authenticated normally. Administrators, Managers, staff/admin users, and accounts with Manager access retain the normal validators.
 
+Usernames authenticate case-insensitively while retaining their saved display casing. A database uniqueness rule prevents two accounts whose usernames differ only by letter case.
+
 The development seed is repeatable. Seed-managed staff, shifts, definitions, sections, and tasks have immutable seed keys, so rerunning restores the canonical configuration instead of creating replacements. The command does not create or modify personal Administrator/Manager accounts.
 
 ## Seeded configuration
@@ -43,7 +45,7 @@ The development seed is repeatable. Seed-managed staff, shifts, definitions, sec
 - Awake Night: Night
 - Life Skills: Morning
 
-Morning, Evening, and Night retain 07:00–15:00, 15:00–23:00, and 23:00–07:00 as secondary boundary metadata. Life Skills source-document time blocks do not define shifts; Life Skills uses Morning. The active seed contains 40 Life Skills tasks and 190 tasks overall. Tasks that are conditional or explicitly say “as needed” are selectively configured to allow N/A.
+Morning, Evening, and Night retain 07:00–15:00, 15:00–23:00, and 23:00–07:00 as secondary boundary metadata. Life Skills uses one Morning assignment with the same 28-task list every day; weekday-specific task selection no longer exists. The Phase 5 seed contains 114 reusable Task records and 224 ordered task placements across the seven assignments. Tasks marked conditional by the authoritative configuration selectively allow N/A.
 
 For a shift that crosses midnight, the operational date is the date on which the shift starts. For example, staff working the 23:00–07:00 shift after midnight select the previous calendar date.
 
@@ -51,13 +53,15 @@ For a shift that crosses midnight, the operational date is the date on which the
 
 Authentication answers who may enter Chore. `ProgramMembership` grants either operational-entry or Manager reporting access. `StaffMember` is a separate Program-owned operational roster record with no username, password, or permanent position assignment. Staff select their name for each checklist session; inactive roster records disappear from new-work selection while historical attribution remains.
 
-The first request for a valid date/category/shift lazily creates a `ChecklistInstance`. Its database uniqueness constraint prevents duplicates. SQLite atomic writes begin in `IMMEDIATE` mode and retry transient lock errors within a small bound, so concurrent creation and state changes serialize safely in the Phase 1 deployment. In the same transaction, `ChecklistItem` rows snapshot the category, shift, section, task label, ordering, N/A permission, weekday, and schedule times. Later configuration edits therefore do not rewrite historical operational meaning. A definition's category and shift become immutable after its first operational checklist, and each instance validates that its definition/category/shift identity agrees.
+The first request for a valid date/category/shift lazily creates a `ChecklistInstance`. Its database uniqueness constraint prevents duplicates. SQLite atomic writes begin in `IMMEDIATE` mode and retry transient lock errors within a small bound, so concurrent creation and state changes serialize safely. Tasks belong to Sections and Sections belong to Shift Assignments through explicit ordered memberships. Generation walks those memberships in order, snapshots each unique Task at most once, and uses the first configured applicable Section when multiple paths reach the same Task. `ChecklistItem` rows snapshot the category, shift, section, task label, ordering, N/A permission, and optional schedule times. Later configuration edits therefore do not rewrite historical operational meaning.
 
-Every meaningful item state change updates the current state and appends a `StaffContribution` in one transaction. Contributions reference the selected operational `StaffMember`; the authenticated account is retained separately as optional audit metadata. The service rechecks operational authorization, selected Staff status and Program, active configuration, and per-task N/A permission.
+Every meaningful item state change updates the current state and appends a Task Entry in one transaction. Entries reference the selected operational `StaffMember`; the authenticated account is retained separately as optional audit metadata. The programming task requires an activity description, and its completion plus description are committed atomically. Discrepancy explanations are stored independently per Chore List and Staff member, so one contributor cannot overwrite another contributor's explanation. Ordinary operational users see completion state but receive no contributor names or timestamps in form HTML or synchronization JSON; Manager/Admin reports retain the audit details.
 
 ## Administration
 
-The Django admin keeps Authentication Users separate from Operational Staff. Administrators can add, rename, deactivate, and reactivate roster records; delete is disabled so history is preserved. It also manages Program memberships, categories, shifts, definitions, tasks, and delivery records.
+The Django admin keeps Authentication Users separate from Staff. Administrators can add, rename, deactivate, and reactivate roster records; delete is disabled so history is preserved. Admin wording uses Chores, Shift Assignments, Reports, Task Instances, Sections, Staff, Program Assignments, Email Reports, Positions, Task Entries, and Tasks. Django Groups remain installed but are hidden from routine Chore administration. Ordered inlines expose Task-to-Section and Section-to-Shift-Assignment reuse in both directions, and dark mode uses a centralized accessible palette.
+
+Administrators can download a deterministic, secret-free JSON snapshot from **Export Configuration** in the Admin header. It contains Programs, Positions, Shifts, Shift Assignments, reusable Sections and Tasks, ordered memberships, Staff configuration, Program Assignments, and scheduled-report routing flags. It excludes Reports, Task Instances, Task Entries, discrepancy/programming content, delivery history, password hashes, sessions, tokens, SMTP credentials, and application secrets.
 
 Phase 3 adds plain-language field labels, section descriptions, active/inactive guidance, report-routing explanations, and focused confirmation prompts for deactivation and removal of future N/A eligibility. Deactivation prevents future operational use while preserving historical Chore Lists, snapshots, Staff Contributions, and sent-report records. Destructive bulk deletion is unavailable on the clarified configuration screens; Django's protected relationships and confirmation page continue to guard individual deletion. The legacy special-case roster identity and all associated flags, filtering, seed behavior, and migration handling have been removed; operational staff now follow one uniform model.
 
@@ -65,7 +69,7 @@ Phase 3 adds plain-language field labels, section descriptions, active/inactive 
 
 Staff working the same Program + Position + Shift + operational date continue to use one shared `ChecklistInstance`. The staff page checks a Program-authorized JSON state endpoint every seven seconds while the page is visible and performs an immediate check when a background tab becomes visible. When the server revision has not changed, the endpoint returns only the unchanged revision, keeping polling payloads small.
 
-Task actions update the interface immediately, submit only the selected item state, and then replace the visible checklist state with the canonical server response. Coworker updates reconcile task state, N/A state, Staff Contribution attribution, timestamps, progress, and the recent-contribution list without a manual refresh. Polling pauses while the page is hidden and while a local mutation is in flight, so actively submitted controls are not replaced by a background refresh.
+Task actions update the interface immediately, submit only the selected item state, and then replace the visible checklist state with the canonical server response. Coworker updates reconcile task and N/A state plus progress without exposing contributor attribution to ordinary users. Authorized audit viewers may also receive contributor details. Polling pauses while the page is hidden and while a local mutation is in flight, so actively submitted controls are not replaced by a background refresh.
 
 Concurrency remains deliberately small and database-backed: each mutation rechecks Program authorization, roster status, configuration identity, and task-level N/A eligibility inside the existing atomic write. The target item is locked where supported; SQLite uses `IMMEDIATE` transactions with bounded lock retries. Each meaningful state transition and its append-only Staff Contribution are committed together. Clients never submit a whole checklist snapshot, so stale browser state cannot overwrite unrelated newer task changes.
 
@@ -78,6 +82,19 @@ python manage.py test
 python -m compileall chore checklists
 git diff --check main..HEAD
 ```
+
+## Phase 5 live-test reset
+
+Phase 5 intentionally replaces the old task/section and weekday Life Skills schema. Because the deployment is still live testing, the supported clean transition is to stop the app, archive and remove the live-test SQLite file, start the app so migrations build a fresh database, then seed the Phase 5 configuration and optionally regenerate mock history. Exact Unraid commands are documented in `docs/DEPLOYMENT.md`. For a disposable local database, remove `db.sqlite3`, then run:
+
+```powershell
+python manage.py migrate
+$env:CHORE_OPERATIONAL_PASSWORD = "choose-the-live-test-password"
+python manage.py seed_development --reset-passwords
+python manage.py generate_mock_data --days 365
+```
+
+No database is deleted by normal application startup.
 
 ## Production deployment
 
@@ -133,4 +150,4 @@ python manage.py purge_operational_data --fresh-start
 
 Fresh-start mode removes all non-mock Chore List instances, their item snapshots and Staff Contributions, plus scheduled report delivery history. Generated mock Chore Lists, items, and Staff Contributions remain available for reporting; `python manage.py generate_mock_data --clear` is the explicit way to remove them. Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster are also preserved. The purge contains no named or special-case staff cleanup logic.
 
-Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. The application intentionally uses short polling rather than websocket or message-bus infrastructure. It does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, infrastructure queues, or Phase 5 functionality.
+Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. Phase 5 adds reusable ordered configuration, contributor privacy and discrepancy explanations, revised web/print/email reporting, and configuration-only export. The application intentionally uses short polling rather than websocket or message-bus infrastructure and does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, or infrastructure queues.

@@ -3,10 +3,16 @@ from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
 from checklists.health import health
+from checklists.views import export_configuration
 
 
 urlpatterns = [
     path("health/", health, name="health"),
+    path(
+        "admin/export-configuration/",
+        export_configuration,
+        name="export-configuration",
+    ),
     path("admin/", admin.site.urls),
     path(
         "login/",

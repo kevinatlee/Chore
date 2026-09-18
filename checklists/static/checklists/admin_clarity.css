@@ -13,6 +13,7 @@
   color: #173d36; background: #e2f0ed; border-radius: .35rem; font-size: .78rem;
 }
 .admin-context span { color: #45615c; }
+.admin-export-link { margin-top: .2rem; font-weight: 750; }
 .module h2, .module caption, .inline-group h2 { letter-spacing: .01em; }
 .form-row .help, .form-row p.help { max-width: 52rem; color: #59666d; line-height: 1.45; }
 fieldset.module > h2 + .description { margin: .75rem 1rem; color: #4d5f66; line-height: 1.5; }
@@ -20,6 +21,135 @@ fieldset.module > h2 + .description { margin: .75rem 1rem; color: #4d5f66; line-
 .submit-row { position: sticky; bottom: 0; z-index: 5; border-top: 1px solid #cbd6da; box-shadow: 0 -4px 14px rgb(20 45 50 / 8%); }
 input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, button:focus-visible {
   outline: 3px solid #2e8172; outline-offset: 2px;
+}
+
+/* Dark mode uses one semantic palette so core Admin and relationship inlines
+   retain the accepted light-mode hierarchy without isolated colour patches. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --chore-bg: #101715;
+  --chore-surface: #18211f;
+  --chore-surface-raised: #202b28;
+  --chore-row-alt: #1b2522;
+  --chore-row-hover: #273531;
+  --chore-border: #3b4b46;
+  --chore-text: #edf5f2;
+  --chore-muted: #aabbb5;
+  --chore-link: #7fd0bb;
+  --chore-link-hover: #a5e4d3;
+  --chore-focus: #77d7c0;
+  --chore-danger: #ff9a9a;
+  --body-bg: var(--chore-bg);
+  --body-fg: var(--chore-text);
+  --darkened-bg: var(--chore-surface-raised);
+  --selected-bg: var(--chore-row-hover);
+  --selected-row: var(--chore-row-hover);
+  --hairline-color: var(--chore-border);
+  --border-color: var(--chore-border);
+  --link-fg: var(--chore-link);
+  --link-hover-color: var(--chore-link-hover);
+  --link-selected-fg: var(--chore-link-hover);
+  --close-button-bg: #35433f;
+  --close-button-hover-bg: #465852;
+  --delete-button-bg: #9f3c3c;
+  --delete-button-hover-bg: #bd4b4b;
+}
+html[data-theme="dark"] body,
+html[data-theme="dark"] #container { color: var(--chore-text); background: var(--chore-bg); }
+html[data-theme="dark"] #header,
+html[data-theme="dark"] .module,
+html[data-theme="dark"] .inline-group,
+html[data-theme="dark"] .submit-row,
+html[data-theme="dark"] #changelist-filter,
+html[data-theme="dark"] #changelist .actions,
+html[data-theme="dark"] .dashboard #content-related { background: var(--chore-surface); border-color: var(--chore-border); }
+html[data-theme="dark"] .module h2,
+html[data-theme="dark"] .module caption,
+html[data-theme="dark"] .inline-group h2 { color: var(--chore-text); background: var(--chore-surface-raised); }
+html[data-theme="dark"] table thead th,
+html[data-theme="dark"] table thead th a { color: var(--chore-muted); background: var(--chore-surface-raised); }
+html[data-theme="dark"] tbody tr { background: var(--chore-surface); }
+html[data-theme="dark"] tbody tr:nth-child(even) { background: var(--chore-row-alt); }
+html[data-theme="dark"] tbody tr:hover { background: var(--chore-row-hover); }
+html[data-theme="dark"] td,
+html[data-theme="dark"] th,
+html[data-theme="dark"] .form-row,
+html[data-theme="dark"] fieldset,
+html[data-theme="dark"] .inline-related { border-color: var(--chore-border); }
+html[data-theme="dark"] input,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select,
+html[data-theme="dark"] .selector-available,
+html[data-theme="dark"] .selector-chosen { color: var(--chore-text); background: #111a18; border-color: var(--chore-border); }
+html[data-theme="dark"] input:focus,
+html[data-theme="dark"] textarea:focus,
+html[data-theme="dark"] select:focus { border-color: var(--chore-focus); box-shadow: 0 0 0 2px rgb(119 215 192 / 25%); }
+html[data-theme="dark"] a { color: var(--chore-link); }
+html[data-theme="dark"] a:hover { color: var(--chore-link-hover); }
+html[data-theme="dark"] .form-row .help,
+html[data-theme="dark"] .form-row p.help,
+html[data-theme="dark"] fieldset.module > h2 + .description,
+html[data-theme="dark"] .quiet,
+html[data-theme="dark"] .help { color: var(--chore-muted); }
+html[data-theme="dark"] .button,
+html[data-theme="dark"] input[type="submit"],
+html[data-theme="dark"] input[type="button"],
+html[data-theme="dark"] .submit-row input { color: #fff; background: #24685c; border-color: #438b7d; }
+html[data-theme="dark"] .button:hover,
+html[data-theme="dark"] input[type="submit"]:hover { background: #307e6f; }
+html[data-theme="dark"] .errornote,
+html[data-theme="dark"] ul.errorlist { color: var(--chore-danger); background: #3a1f1f; border-color: #844545; }
+html[data-theme="dark"] .admin-context { color: #dff5ef; background: #213d36; border: 1px solid #3d6b60; }
+html[data-theme="dark"] .admin-context span { color: #b8d2cb; }
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] {
+    color-scheme: dark;
+    --chore-bg: #101715;
+    --chore-surface: #18211f;
+    --chore-surface-raised: #202b28;
+    --chore-row-alt: #1b2522;
+    --chore-row-hover: #273531;
+    --chore-border: #3b4b46;
+    --chore-text: #edf5f2;
+    --chore-muted: #aabbb5;
+    --chore-link: #7fd0bb;
+    --chore-link-hover: #a5e4d3;
+    --body-bg: var(--chore-bg);
+    --body-fg: var(--chore-text);
+    --darkened-bg: var(--chore-surface-raised);
+    --selected-bg: var(--chore-row-hover);
+    --selected-row: var(--chore-row-hover);
+    --hairline-color: var(--chore-border);
+    --border-color: var(--chore-border);
+    --link-fg: var(--chore-link);
+    --link-hover-color: var(--chore-link-hover);
+    --link-selected-fg: var(--chore-link-hover);
+  }
+  html[data-theme="auto"] body,
+  html[data-theme="auto"] #container { color: var(--chore-text); background: var(--chore-bg); }
+  html[data-theme="auto"] .module,
+  html[data-theme="auto"] .inline-group,
+  html[data-theme="auto"] .submit-row,
+  html[data-theme="auto"] #changelist-filter,
+  html[data-theme="auto"] #changelist .actions { background: var(--chore-surface); border-color: var(--chore-border); }
+  html[data-theme="auto"] .module h2,
+  html[data-theme="auto"] .module caption,
+  html[data-theme="auto"] .inline-group h2,
+  html[data-theme="auto"] table thead th { color: var(--chore-text); background: var(--chore-surface-raised); }
+  html[data-theme="auto"] tbody tr { background: var(--chore-surface); }
+  html[data-theme="auto"] tbody tr:nth-child(even) { background: var(--chore-row-alt); }
+  html[data-theme="auto"] tbody tr:hover { background: var(--chore-row-hover); }
+  html[data-theme="auto"] a,
+  html[data-theme="auto"] table thead th a { color: var(--chore-link); }
+  html[data-theme="auto"] a:hover { color: var(--chore-link-hover); }
+  html[data-theme="auto"] input,
+  html[data-theme="auto"] textarea,
+  html[data-theme="auto"] select { color: var(--chore-text); background: #111a18; border-color: var(--chore-border); }
+  html[data-theme="auto"] .form-row .help,
+  html[data-theme="auto"] .form-row p.help,
+  html[data-theme="auto"] .quiet,
+  html[data-theme="auto"] .help { color: var(--chore-muted); }
 }
 
 @media (max-width: 767px) {

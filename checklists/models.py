@@ -1,5 +1,3 @@
-from datetime import time
-
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -20,6 +18,8 @@ class Program(models.Model):
 
     class Meta:
         ordering = ("name", "id")
+        verbose_name = "program"
+        verbose_name_plural = "programs"
 
     def __str__(self):
         return self.name
@@ -43,6 +43,8 @@ class ProgramMembership(models.Model):
 
     class Meta:
         ordering = ("program__name", "role", "user__username")
+        verbose_name = "program assignment"
+        verbose_name_plural = "program assignments"
         constraints = [
             models.UniqueConstraint(
                 fields=("user", "program"), name="unique_user_program_membership"
@@ -73,8 +75,8 @@ class StaffMember(models.Model):
 
     class Meta:
         ordering = ("first_name", "last_name", "id")
-        verbose_name = "operational staff member"
-        verbose_name_plural = "operational staff"
+        verbose_name = "staff member"
+        verbose_name_plural = "staff"
         constraints = [
             models.UniqueConstraint(
                 fields=("program", "first_name", "last_name"),
@@ -113,7 +115,8 @@ class StaffCategory(ActiveOrderedModel):
     slug = models.SlugField(max_length=80)
 
     class Meta(ActiveOrderedModel.Meta):
-        verbose_name_plural = "staff categories"
+        verbose_name = "position"
+        verbose_name_plural = "positions"
         constraints = [
             models.UniqueConstraint(
                 fields=("program", "slug"), name="unique_program_category_slug"
@@ -150,8 +153,16 @@ class ChecklistDefinition(ActiveOrderedModel):
     shift = models.ForeignKey(
         Shift, on_delete=models.PROTECT, related_name="checklist_definitions"
     )
+    sections = models.ManyToManyField(
+        "ChecklistSection",
+        through="AssignmentSectionMembership",
+        related_name="assignments",
+        blank=True,
+    )
 
     class Meta(ActiveOrderedModel.Meta):
+        verbose_name = "shift assignment"
+        verbose_name_plural = "shift assignments"
         constraints = [
             models.UniqueConstraint(
                 fields=("category", "shift"), name="unique_definition_category_shift"
@@ -194,50 +205,38 @@ class ChecklistSection(ActiveOrderedModel):
     seed_key = models.SlugField(
         max_length=200, unique=True, null=True, blank=True, editable=False
     )
-    definition = models.ForeignKey(
-        ChecklistDefinition, on_delete=models.PROTECT, related_name="sections"
+    tasks = models.ManyToManyField(
+        "TaskDefinition",
+        through="SectionTaskMembership",
+        related_name="sections",
+        blank=True,
     )
 
     class Meta(ActiveOrderedModel.Meta):
-        constraints = [
-            models.UniqueConstraint(
-                fields=("definition", "sort_order"), name="unique_section_order"
-            )
-        ]
+        verbose_name = "section"
+        verbose_name_plural = "sections"
 
     def __str__(self):
-        return f"{self.definition}: {self.name}"
-
-
-class Weekday(models.IntegerChoices):
-    MONDAY = 0, "Monday"
-    TUESDAY = 1, "Tuesday"
-    WEDNESDAY = 2, "Wednesday"
-    THURSDAY = 3, "Thursday"
-    FRIDAY = 4, "Friday"
-    SATURDAY = 5, "Saturday"
-    SUNDAY = 6, "Sunday"
+        return self.name
 
 
 class TaskDefinition(models.Model):
     seed_key = models.SlugField(
         max_length=240, unique=True, null=True, blank=True, editable=False
     )
-    section = models.ForeignKey(
-        ChecklistSection, on_delete=models.PROTECT, related_name="tasks"
-    )
     label = models.CharField(max_length=500)
-    sort_order = models.PositiveIntegerField(default=0)
     allow_na = models.BooleanField(default=False, verbose_name="Allow N/A")
-    is_active = models.BooleanField(default=True)
-    weekday = models.PositiveSmallIntegerField(
-        choices=Weekday.choices, null=True, blank=True
+    requires_completion_note = models.BooleanField(
+        default=False, verbose_name="Require completion note"
     )
+    is_active = models.BooleanField(default=True)
     scheduled_start = models.TimeField(null=True, blank=True)
     scheduled_end = models.TimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ("section__sort_order", "sort_order", "weekday", "id")
+        ordering = ("label", "id")
+        verbose_name = "task"
+        verbose_name_plural = "tasks"
         constraints = [
             models.CheckConstraint(
                 condition=(
@@ -246,37 +245,69 @@ class TaskDefinition(models.Model):
                 ),
                 name="task_schedule_times_both_or_neither",
             ),
-            models.UniqueConstraint(
-                fields=("section", "sort_order"),
-                condition=Q(weekday__isnull=True),
-                name="unique_general_task_order",
-            ),
-            models.UniqueConstraint(
-                fields=("section", "weekday", "sort_order"),
-                condition=Q(weekday__isnull=False),
-                name="unique_weekday_task_order",
-            ),
         ]
 
     def clean(self):
         super().clean()
         if (self.scheduled_start is None) != (self.scheduled_end is None):
             raise ValidationError("Scheduled start and end must be set together.")
-        if (
-            self.section_id
-            and self.section.definition.category.slug == "life-skills"
-            and self.scheduled_end
-            and self.scheduled_end > time(15, 0)
-        ):
-            raise ValidationError(
-                {"scheduled_end": "Life Skills items after 15:00 are outside Chore scope."}
-            )
+    def __str__(self):
+        from .presentation import display_task_text
+        return display_task_text(self.label)
+
+
+class AssignmentSectionMembership(models.Model):
+    assignment = models.ForeignKey(
+        ChecklistDefinition, on_delete=models.CASCADE, related_name="section_memberships"
+    )
+    section = models.ForeignKey(
+        ChecklistSection, on_delete=models.PROTECT, related_name="assignment_memberships"
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ("sort_order", "id")
+        verbose_name = "shift assignment section"
+        verbose_name_plural = "shift assignment sections"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("assignment", "section"),
+                name="unique_assignment_section_membership",
+            ),
+            models.UniqueConstraint(
+                fields=("assignment", "sort_order"),
+                name="unique_assignment_section_order",
+            ),
+        ]
 
     def __str__(self):
-        prefix = f"{self.get_weekday_display()}: " if self.weekday is not None else ""
-        from .presentation import display_task_text
+        return f"{self.assignment}: {self.section}"
 
-        return f"{self.section} — {prefix}{display_task_text(self.label)}"
+
+class SectionTaskMembership(models.Model):
+    section = models.ForeignKey(
+        ChecklistSection, on_delete=models.CASCADE, related_name="task_memberships"
+    )
+    task = models.ForeignKey(
+        TaskDefinition, on_delete=models.PROTECT, related_name="section_memberships"
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ("sort_order", "id")
+        verbose_name = "section task"
+        verbose_name_plural = "section tasks"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("section", "task"), name="unique_section_task_membership"
+            ),
+            models.UniqueConstraint(
+                fields=("section", "sort_order"), name="unique_section_task_order"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.section}: {self.task}"
 
 
 class TaskState(models.TextChoices):
@@ -311,6 +342,8 @@ class ChecklistInstance(models.Model):
 
     class Meta:
         ordering = ("-operational_date", "category_name_snapshot", "shift_start_snapshot")
+        verbose_name = "report"
+        verbose_name_plural = "reports"
         constraints = [
             models.UniqueConstraint(
                 fields=("operational_date", "category", "shift"),
@@ -359,9 +392,7 @@ class ChecklistItem(models.Model):
     task_label_snapshot = models.CharField(max_length=500)
     task_order_snapshot = models.PositiveIntegerField()
     allow_na_snapshot = models.BooleanField(default=False)
-    weekday_snapshot = models.PositiveSmallIntegerField(
-        choices=Weekday.choices, null=True, blank=True
-    )
+    requires_completion_note_snapshot = models.BooleanField(default=False)
     scheduled_start_snapshot = models.TimeField(null=True, blank=True)
     scheduled_end_snapshot = models.TimeField(null=True, blank=True)
     current_state = models.CharField(
@@ -398,6 +429,8 @@ class ChecklistItem(models.Model):
                 name="na_requires_snapshot_permission",
             ),
         ]
+        verbose_name = "task instance"
+        verbose_name_plural = "task instances"
 
     def __str__(self):
         return f"{self.instance}: {self.task_label_snapshot}"
@@ -421,10 +454,13 @@ class StaffContribution(models.Model):
     )
     previous_state = models.CharField(max_length=16, choices=TaskState.choices)
     new_state = models.CharField(max_length=16, choices=TaskState.choices)
+    activity_text = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ("created_at", "id")
+        verbose_name = "task entry"
+        verbose_name_plural = "task entries"
         constraints = [
             models.CheckConstraint(
                 condition=Q(previous_state__in=TaskState.values),
@@ -446,6 +482,39 @@ class StaffContribution(models.Model):
 
     def __str__(self):
         return f"{self.staff}: {self.previous_state} → {self.new_state}"
+
+
+class DiscrepancyExplanation(models.Model):
+    instance = models.ForeignKey(
+        ChecklistInstance, on_delete=models.PROTECT, related_name="discrepancy_explanations"
+    )
+    staff = models.ForeignKey(
+        StaffMember, on_delete=models.PROTECT, related_name="discrepancy_explanations"
+    )
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_discrepancy_explanations",
+        null=True,
+        blank=True,
+    )
+    explanation = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("created_at", "id")
+        verbose_name = "discrepancy explanation"
+        verbose_name_plural = "discrepancy explanations"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("instance", "staff"),
+                name="unique_instance_staff_discrepancy",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.instance} — {self.staff}"
 
 
 class ReportCadence(models.TextChoices):
@@ -486,6 +555,8 @@ class ScheduledReportDelivery(models.Model):
 
     class Meta:
         ordering = ("-period_end", "program__name", "cadence", "recipient_email")
+        verbose_name = "email report"
+        verbose_name_plural = "email reports"
         constraints = [
             models.UniqueConstraint(
                 fields=(

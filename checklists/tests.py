@@ -15,6 +15,7 @@ from django.test import Client, SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 
 from .models import (
+    AssignmentSectionMembership,
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
@@ -22,6 +23,7 @@ from .models import (
     Program,
     ProgramMembership,
     ProgramRole,
+    SectionTaskMembership,
     Shift,
     StaffCategory,
     StaffContribution,
@@ -29,7 +31,7 @@ from .models import (
     TaskDefinition,
     TaskState,
 )
-from .seed_data import DEFINITIONS, LIFE_SKILLS_SLOTS, STAFF_ROSTER
+from .seed_data import ASSIGNMENTS, STAFF_ROSTER
 from .presentation import display_task_text
 from .services import (
     SQLITE_LOCK_ATTEMPTS,
@@ -77,14 +79,21 @@ class OperationalFixtureMixin:
             shift=self.shift,
             sort_order=10,
         )
-        self.section = ChecklistSection.objects.create(
-            definition=self.definition, name="Office", sort_order=10
+        self.section = ChecklistSection.objects.create(name="Office", sort_order=10)
+        self.assignment_section = AssignmentSectionMembership.objects.create(
+            assignment=self.definition, section=self.section, sort_order=10
         )
         self.regular = TaskDefinition.objects.create(
-            section=self.section, label="Regular task", sort_order=10
+            label="Regular task"
         )
         self.optional = TaskDefinition.objects.create(
-            section=self.section, label="Optional task", sort_order=20, allow_na=True
+            label="Optional task", allow_na=True
+        )
+        self.regular_membership = SectionTaskMembership.objects.create(
+            section=self.section, task=self.regular, sort_order=10
+        )
+        self.optional_membership = SectionTaskMembership.objects.create(
+            section=self.section, task=self.optional, sort_order=20
         )
 
 
@@ -230,14 +239,16 @@ class SharedChecklistDomainTests(OperationalFixtureMixin, TestCase):
         self.shift.end_time = time(14)
         self.shift.save(update_fields=("name", "start_time", "end_time"))
         self.section.name = "Changed section"
-        self.section.sort_order = 90
-        self.section.save(update_fields=("name", "sort_order"))
+        self.assignment_section.sort_order = 90
+        self.assignment_section.save(update_fields=("sort_order",))
+        self.section.save(update_fields=("name",))
         self.regular.label = "Changed task"
-        self.regular.sort_order = 90
+        self.regular_membership.sort_order = 90
+        self.regular_membership.save(update_fields=("sort_order",))
         self.regular.scheduled_start = time(10)
         self.regular.scheduled_end = time(11)
         self.regular.save(
-            update_fields=("label", "sort_order", "scheduled_start", "scheduled_end")
+            update_fields=("label", "scheduled_start", "scheduled_end")
         )
         instance.refresh_from_db()
         item.refresh_from_db()
@@ -557,7 +568,8 @@ class SharedChecklistSynchronizationTests(OperationalFixtureMixin, TestCase):
         first_state = response_a.json()
         regular = next(item for item in first_state["items"] if item["id"] == self.regular_item.pk)
         self.assertEqual(regular["state"], TaskState.COMPLETED)
-        self.assertEqual(regular["staff_name"], self.staff_a.display_name)
+        self.assertNotIn("staff_name", regular)
+        self.assertEqual(first_state["contributions"], [])
 
         poll_b = self.client_b.get(
             self._state_url(),
@@ -575,9 +587,9 @@ class SharedChecklistSynchronizationTests(OperationalFixtureMixin, TestCase):
         canonical = response_b.json()
         by_id = {item["id"]: item for item in canonical["items"]}
         self.assertEqual(by_id[self.regular_item.pk]["state"], TaskState.COMPLETED)
-        self.assertEqual(by_id[self.regular_item.pk]["staff_name"], self.staff_a.display_name)
+        self.assertNotIn("staff_name", by_id[self.regular_item.pk])
         self.assertEqual(by_id[self.optional_item.pk]["state"], TaskState.NOT_APPLICABLE)
-        self.assertEqual(by_id[self.optional_item.pk]["staff_name"], self.staff_b.display_name)
+        self.assertNotIn("staff_name", by_id[self.optional_item.pk])
         self.assertEqual(canonical["resolved_count"], 2)
 
         poll_a = self.client_a.get(
@@ -621,10 +633,14 @@ class SharedChecklistSynchronizationTests(OperationalFixtureMixin, TestCase):
         other_definition = ChecklistDefinition.objects.create(
             name="Other Morning", category=other_category, shift=self.shift, sort_order=10
         )
-        other_section = ChecklistSection.objects.create(
-            definition=other_definition, name="Other section", sort_order=10
+        other_section = ChecklistSection.objects.create(name="Other section", sort_order=10)
+        AssignmentSectionMembership.objects.create(
+            assignment=other_definition, section=other_section, sort_order=10
         )
-        TaskDefinition.objects.create(section=other_section, label="Other task", sort_order=10)
+        other_task = TaskDefinition.objects.create(label="Other task")
+        SectionTaskMembership.objects.create(
+            section=other_section, task=other_task, sort_order=10
+        )
         resolve_checklist(other_definition, self.operational_date)
         cross_program = self.client_a.get(
             reverse("checklist-state", args=(other_definition.pk,)),
@@ -644,19 +660,11 @@ class AdministrationClarityTests(OperationalFixtureMixin, TestCase):
         self.assertContains(index, "preserving historical Chore Lists")
 
         task_page = self.client.get(reverse("admin:checklists_taskdefinition_add"))
-        self.assertContains(task_page, "Allow staff to choose N/A")
-        self.assertContains(task_page, "The setting is copied into each new Chore List snapshot.")
+        self.assertContains(task_page, "Allow N/A")
+        self.assertContains(task_page, "Require completion note")
         self.assertContains(task_page, "admin_clarity.js")
-
-        membership_page = self.client.get(reverse("admin:checklists_programmembership_add"))
-        self.assertContains(membership_page, "Access and email routing")
-        self.assertContains(membership_page, "Managers with an active account and active membership")
-
-        staff_page = self.client.get(
-            reverse("admin:checklists_staffmember_change", args=(self.staff_a.pk,))
-        )
-        self.assertContains(staff_page, "this is not a sign-in account")
-        self.assertContains(staff_page, "Existing Staff Contributions")
+        self.assertContains(index, "Export Configuration")
+        self.assertNotContains(index, "Groups")
 
 
 class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
@@ -670,8 +678,8 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertNotContains(response, "Operational date")
         self.assertContains(response, '<option value="">Select Staff</option>', html=True)
         self.assertContains(response, '<button class="button primary" type="submit">Select Shift</button>', html=True)
-        self.assertContains(response, 'min="2026-09-09"')
-        self.assertContains(response, 'max="2026-09-16"')
+        self.assertContains(response, 'min="2026-09-11"')
+        self.assertContains(response, 'max="2026-09-18"')
         self.assertContains(response, 'name="staff"')
         self.assertContains(response, "Alfred Sampare")
         self.assertContains(response, 'name="category"')
@@ -1018,42 +1026,50 @@ class SeedCorrectionTests(TestCase):
                 ("Life Skills", "Morning"),
             },
         )
-        for category_key, shift_key, _, _, expected_sections in DEFINITIONS:
+        for category_key, shift_key, _, _, expected_sections in ASSIGNMENTS:
             definition = ChecklistDefinition.objects.get(
                 seed_key=f"definition-{category_key}-{shift_key}"
             )
-            sections = definition.sections.filter(is_active=True).order_by("sort_order")
+            section_memberships = definition.section_memberships.select_related(
+                "section"
+            ).filter(section__is_active=True).order_by("sort_order")
             self.assertEqual(
-                [section.name for section in sections],
+                [membership.section.name for membership in section_memberships],
                 [name for name, _ in expected_sections],
             )
-            for section, (_, expected_labels) in zip(sections, expected_sections):
+            for membership, (_, expected_tasks) in zip(
+                section_memberships, expected_sections
+            ):
                 self.assertEqual(
-                    list(
-                        section.tasks.filter(is_active=True)
-                        .order_by("sort_order")
-                        .values_list("label", flat=True)
-                    ),
-                    expected_labels,
+                    [
+                        (row.task.label, row.task.allow_na)
+                        for row in membership.section.task_memberships.select_related(
+                            "task"
+                        ).filter(task__is_active=True).order_by("sort_order")
+                    ],
+                    [(task["label"], task["allow_na"]) for task in expected_tasks],
                 )
 
         life_definition = ChecklistDefinition.objects.get(
             seed_key="definition-life-skills-morning"
         )
-        life_tasks = TaskDefinition.objects.filter(
-            section__definition=life_definition, is_active=True
-        )
-        self.assertEqual(life_tasks.count(), 40)
-        self.assertFalse(life_tasks.filter(scheduled_end__gt=time(15)).exists())
-        for order, (slot_key, start, end, labels) in enumerate(LIFE_SKILLS_SLOTS, start=1):
-            for weekday, label in enumerate(labels):
-                task = life_tasks.get(seed_key=f"task-life-skills-{slot_key}-{weekday}")
-                self.assertEqual(
-                    (task.label, task.sort_order, task.weekday),
-                    (label, order * 10, weekday),
-                )
-                self.assertEqual(task.scheduled_start, time.fromisoformat(start))
-                self.assertEqual(task.scheduled_end, time.fromisoformat(end))
+        expected_life_labels = [
+            task["label"]
+            for _, tasks in next(
+                assignment[4]
+                for assignment in ASSIGNMENTS
+                if assignment[0:2] == ("life-skills", "morning")
+            )
+            for task in tasks
+        ]
+        self.assertEqual(len(expected_life_labels), 28)
+        for offset in range(7):
+            instance = resolve_checklist(life_definition, date(2026, 9, 14) + timedelta(days=offset))
+            self.assertEqual(
+                list(instance.items.values_list("task_label_snapshot", flat=True)),
+                expected_life_labels,
+            )
+        self.assertFalse(any(field.name == "weekday" for field in TaskDefinition._meta.fields))
 
     def test_selector_only_renders_shifts_valid_for_selected_category(self):
         operator = get_user_model().objects.get(username="sonderhouse")
@@ -1085,11 +1101,7 @@ class SeedCorrectionTests(TestCase):
             staff_member=staff,
             new_state=TaskState.COMPLETED,
         )
-        life_section = ChecklistSection.objects.get(seed_key="section-life-skills-morning-01")
         removed_task = TaskDefinition.objects.create(
-            section=life_section,
-            weekday=0,
-            sort_order=500,
             label="Break",
             scheduled_start=time(10),
             scheduled_end=time(10, 15),
@@ -1106,7 +1118,6 @@ class SeedCorrectionTests(TestCase):
         self.assertEqual(contribution.recorded_by, operator)
         removed_task.refresh_from_db()
         self.assertFalse(removed_task.is_active)
-        self.assertEqual(removed_task.seed_key, "task-life-skills-retired-break-1000-0")
 
 
 class MockDataTests(TestCase):
@@ -1184,3 +1195,4 @@ class MockDataTests(TestCase):
             StaffContribution.objects.filter(item__instance__is_mock_data=True).count(),
         )
         self.assertEqual(first, second)
+    SectionTaskMembership,

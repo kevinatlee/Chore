@@ -54,9 +54,13 @@ class Command(BaseCommand):
             for cadence, period in scheduled_periods(local_now.date()):
                 report = build_report(program=program, period=period)
                 snapshot = report_snapshot(report)
+                latest_effective_date = max(
+                    (row["operational_date"] for row in report["rows"]),
+                    default=period.end,
+                )
                 subject = (
-                    f"Chore {cadence} report — {program.name} — "
-                    f"{period.start.isoformat()} to {period.end.isoformat()}"
+                    f"Chore {cadence.title()} Report --- {program.name} --- "
+                    f"{latest_effective_date.isoformat()}"
                 )
                 body_html = render_to_string(
                     "checklists/email_report.html",

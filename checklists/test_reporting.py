@@ -479,7 +479,17 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         )
         self.assertContains(response, 'name="section"')
         self.assertContains(response, 'type="date"')
-        for label in ("Period", "Date", "Position", "Shift", "Staff", "Completion", "Section"):
+        self.assertContains(response, 'class="date-control"')
+        self.assertContains(response, 'class="date-control-display"')
+        self.assertContains(response, 'class="date-control-input"')
+        self.assertContains(response, 'id="report-date"')
+        self.assertContains(response, 'name="date"')
+        self.assertContains(
+            response, f'value="{self.operational_date.isoformat()}"'
+        )
+        self.assertContains(response, "date_control.js")
+        self.assertContains(response, '<label for="report-date">Date')
+        for label in ("Period", "Position", "Shift", "Staff", "Completion", "Section"):
             self.assertContains(response, f"<label>{label}", html=False)
         self.assertNotContains(response, 'name="month"')
         self.assertNotContains(response, 'name="year"')
@@ -497,12 +507,14 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
             reverse("reports"),
             {"period": "monthly", "date": "2024-02-17"},
         )
-        self.assertContains(monthly, 'name="date" value="2024-02-17"')
+        self.assertContains(monthly, 'name="date"')
+        self.assertContains(monthly, 'value="2024-02-17"')
         legacy = self.client.get(
             reverse("reports"),
             {"period": "monthly", "month": "2024-02"},
         )
-        self.assertContains(legacy, 'name="date" value="2024-02-01"')
+        self.assertContains(legacy, 'name="date"')
+        self.assertContains(legacy, 'value="2024-02-01"')
         self.assertNotContains(legacy, "month=2024-02")
         with open("checklists/static/checklists/styles.css", encoding="utf-8") as stylesheet:
             css = stylesheet.read()
@@ -513,12 +525,31 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.assertIn(".report-filter-row-primary, .report-filter-row-secondary { grid-template-columns: 1fr; }", css)
         self.assertIn(".report-table .report-date { min-width: 7.25rem; white-space: nowrap; }", css)
         self.assertIn("max-width: 100%", css)
-        self.assertIn('input[type="date"] {', css)
-        self.assertIn("display: block; width: 100%; max-width: 100%; min-width: 0;", css)
-        self.assertIn("height: 2.75rem;", css)
-        self.assertIn("text-align: left;", css)
-        self.assertIn('input[type="date"]::-webkit-date-and-time-value', css)
-        self.assertIn('input[type="date"]::-webkit-datetime-edit', css)
+        self.assertIn(".date-control { width: 100%; max-width: 100%; min-width: 0; }", css)
+        self.assertIn("@media (hover: none) and (pointer: coarse)", css)
+        self.assertIn(".date-control-display {", css)
+        self.assertIn(".date-control-input {", css)
+        self.assertIn("opacity: 0; cursor: pointer;", css)
+        self.assertNotIn(".date-control-input { display: none", css)
+        self.assertNotIn("visibility: hidden", css)
+        self.assertNotIn("::-webkit-date-and-time-value", css)
+        self.assertNotIn("::-webkit-datetime-edit", css)
+        with open("checklists/static/checklists/date_control.js", encoding="utf-8") as script:
+            date_control_js = script.read()
+        self.assertIn('value.split("-").map(Number)', date_control_js)
+        self.assertIn("new Date(year, month - 1, day)", date_control_js)
+        self.assertIn('input.addEventListener("input", updateDisplay)', date_control_js)
+        self.assertIn('input.addEventListener("change", updateDisplay)', date_control_js)
+        for template_path in (
+            "templates/checklists/dashboard.html",
+            "templates/checklists/report.html",
+        ):
+            with self.subTest(template_path=template_path), open(
+                template_path, encoding="utf-8"
+            ) as template:
+                self.assertIn(
+                    '{% include "checklists/_date_control.html"', template.read()
+                )
 
     def test_report_summary_renders_percentage_and_complete_inline(self):
         selected_date = self.operational_date

@@ -15,7 +15,7 @@
     {% endif %}
     <label for="date">Date</label>
     <p class="field-help">For Night shifts, use the date on which the shift starts.</p>
-    <input id="date" name="date" type="date" value="{{ operational_date|date:'Y-m-d' }}" min="{{ earliest_operational_date|date:'Y-m-d' }}" max="{{ latest_operational_date|date:'Y-m-d' }}" required>
+    {% include "checklists/_date_control.html" with input_id="date" input_name="date" date_value=operational_date|date:"Y-m-d" display_value=operational_date|date:"M j, Y" min_value=earliest_operational_date|date:"Y-m-d" max_value=latest_operational_date|date:"Y-m-d" required=True %}
 
     <label for="staff">Staff</label>
     <select id="staff" name="staff" required>

@@ -1,0 +1,13 @@
+<div class="date-control" data-date-control>
+  <span class="date-control-display" data-date-control-display aria-hidden="true">{{ display_value }}</span>
+  <input
+    class="date-control-input"
+    id="{{ input_id }}"
+    name="{{ input_name }}"
+    type="date"
+    value="{{ date_value }}"
+    {% if min_value %}min="{{ min_value }}"{% endif %}
+    {% if max_value %}max="{{ max_value }}"{% endif %}
+    {% if required %}required{% endif %}
+  >
+</div>

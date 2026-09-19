@@ -31,9 +31,10 @@
           <option value="rolling365" {% if period.kind == 'rolling365' %}selected{% endif %}>Rolling 365 days</option>
         </select>
       </label>
-      <label>Date
-        <input type="date" name="date" value="{{ period.selected_date|date:'Y-m-d' }}">
-      </label>
+      <div class="report-filter-field">
+        <label for="report-date">Date</label>
+        {% include "checklists/_date_control.html" with input_id="report-date" input_name="date" date_value=period.selected_date|date:"Y-m-d" display_value=period.selected_date|date:"M j, Y" %}
+      </div>
       <label>Completion
         <select name="status">
           <option value="">All</option>

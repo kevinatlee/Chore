@@ -1,15 +1,17 @@
 # Chore production deployment
 
-This deployment keeps SQLite and the existing Chore data model. Production and test use
-separate writable appdata directories and separate host ports. Both images are built from
-the same Dockerfile; the Git branch determines the published tag.
+Production and ChoreTest are Unraid template-managed Docker containers. Unraid does not
+need or maintain a Git checkout, and deployment does not use Docker Compose. GitHub
+Actions builds the same Dockerfile for both environments; the Git branch determines the
+published GHCR tag. Production and test use separate writable appdata directories and
+separate template-configured host ports.
 
 ## Layout
 
-| Deployment | Image | Container | Host port | Writable appdata |
-| --- | --- | --- | --- | --- |
-| Production | `ghcr.io/kevinatlee/chore:latest` | `Chore` | `8000` | `/mnt/user/appdata/Chore/` |
-| Test | `ghcr.io/kevinatlee/chore:test` | `ChoreTest` | `8001` | `/mnt/user/appdata/ChoreTest/` |
+| Deployment | Image | Container | Writable appdata |
+| --- | --- | --- | --- |
+| Production | `ghcr.io/kevinatlee/chore:latest` | `Chore` | `/mnt/user/appdata/Chore/` |
+| Test | `ghcr.io/kevinatlee/chore:test` | `ChoreTest` | `/mnt/user/appdata/ChoreTest/` |
 
 Production stores its database at `/mnt/user/appdata/Chore/db.sqlite3` and daily backups
 under `/mnt/user/appdata/Chore/backups/`. ChoreTest stores its independent database at
@@ -21,44 +23,33 @@ identity before starting the containers.
 
 ## Initial preparation
 
-1. Clone this repository on Unraid and sign in to GHCR if the package is private:
+Configure both containers through Unraid's Docker templates. The templates pull their
+images directly from GHCR; no repository checkout or Compose file belongs on the server.
+If GHCR package access is private, configure registry credentials in Unraid before pulling
+the images.
 
-   ```sh
-   echo 'A_GITHUB_TOKEN_WITH_READ_PACKAGES' | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
-   ```
+Create or select the persistent appdata paths in the templates:
 
-2. Create appdata directories:
+- Chore: `/mnt/user/appdata/Chore` mounted read/write at `/app/data`.
+- ChoreTest: `/mnt/user/appdata/ChoreTest` mounted read/write at `/app/data`.
+- ChoreTest production backup source: `/mnt/user/appdata/Chore/backups` mounted read-only
+  at `/production-backups`.
 
-   ```sh
-   mkdir -p /mnt/user/appdata/Chore/backups /mnt/user/appdata/ChoreTest
-   chown -R 1000:1000 /mnt/user/appdata/Chore /mnt/user/appdata/ChoreTest
-   ```
+The container runs as UID/GID 1000, so those paths must be writable by that identity.
+Supply environment variables through the Unraid template and use different long random
+`DJANGO_SECRET_KEY` values for production and test.
 
-3. Preserve the intentional current demo/operational data on the first deployment by
-   copying the existing repository `db.sqlite3` into production appdata before the first
-   container start:
-
-   ```sh
-   cp /path/to/Chore/db.sqlite3 /mnt/user/appdata/Chore/db.sqlite3
-   chown 1000:1000 /mnt/user/appdata/Chore/db.sqlite3
-   ```
-
-   Do not run a seed, purge, mock-clear, or cleanup command. Later deployments reuse this
-   persistent file and apply only normal Django migrations.
-
-4. Copy `.env.production.example` to `.env.production` and `.env.test.example` to
-   `.env.test`, beside the Compose files. Both real env files are ignored by Git. Generate
-   different long random `DJANGO_SECRET_KEY` values for production and test.
+For the existing deployment, retain the current production appdata directory. A completely
+new empty installation migrates an empty database automatically but still needs the
+authoritative configuration created once. Only for that fresh-install case, open the Chore
+container console in Unraid and run `python manage.py seed_development`; this is not a
+normal update step.
 
 ## Unraid user template
 
-The versioned production user template is `unraid/my-Chore.xml`. Copy it to the Unraid
-boot device, preserving the filename:
-
-```sh
-cp /path/to/Chore/unraid/my-Chore.xml \
-  /boot/config/plugins/dockerMan/templates-user/my-Chore.xml
-```
+The versioned production template source is `unraid/my-Chore.xml`, and its published raw
+URL is recorded in the template metadata. Import or maintain the template through Unraid;
+do not clone the repository onto the server.
 
 In the Unraid interface, open **Docker → Add Container** and select the Chore user
 template. Its defaults create `Chore` on the bridge network, map host port `4523` to
@@ -71,12 +62,11 @@ The template's WebUI button opens the canonical production URL, `https://chore.c
 its versioned icon is `assets/chore-icon.png`. Production access remains HTTPS through
 Cloudflare Tunnel; port `4523` is the tunnel origin, not a direct application WebUI. Do
 not disable HTTPS redirects or secure cookies to make `http://UNRAID-IP:4523` an
-application access path. The existing Docker Compose deployment below remains fully
-supported.
+application access path.
 
 ## Required environment
 
-Production `.env.production`:
+Production Unraid template variables:
 
 - `APP_FQDN`: production hostname only, without `https://`, a path, or a port.
 - `DJANGO_DEBUG=false`.
@@ -89,7 +79,7 @@ Production `.env.production`:
 - `EMAIL_HOST_PASSWORD`: Gmail App Password, not the normal account password.
 - `DEFAULT_FROM_EMAIL`: visible sender address.
 
-Test `.env.test`:
+ChoreTest Unraid template variables:
 
 - `APP_FQDN`: separate test hostname.
 - `DJANGO_DEBUG=false`.
@@ -98,7 +88,7 @@ Test `.env.test`:
 
 `EMAIL_ENABLED=false` selects a suppressing Django email backend and the container also
 refuses to start ChoreTest if the value is not false. Do not add SMTP credentials to the
-test env file.
+ChoreTest template.
 
 `APP_FQDN` automatically configures Django's allowed host and `https://` CSRF trusted
 origin. Optional comma-separated `DJANGO_ALLOWED_HOSTS` and
@@ -110,21 +100,37 @@ then use the example's `31536000` only when the hostname is permanently HTTPS-on
 The application timezone and container timezone are fixed to `America/Vancouver`. They
 are not user-configurable.
 
-## Start production and test
+## Deploy and update through Unraid
 
-From the repository checkout:
+For a normal production update:
 
-```sh
-docker compose -f compose.production.yml pull
-docker compose -f compose.production.yml up -d
-docker compose -f compose.test.yml pull
-docker compose -f compose.test.yml up -d
-```
+1. Merge the approved code to `main`.
+2. Confirm the GitHub Actions build for `ghcr.io/kevinatlee/chore:latest` completed
+   successfully.
+3. In Unraid, use **Force Update** on the Chore container.
+4. Confirm the container becomes healthy and review its logs.
 
-Production startup creates or retains today's safe backup before applying migrations.
-On a brand-new empty appdata directory, it migrates first and the production scheduler
-creates the first backup immediately afterward. Static assets are collected on every
-start and served by WhiteNoise; Gunicorn serves the application.
+Force Update pulls the new image and recreates the container from the saved template.
+Persistent `/mnt/user/appdata/Chore/db.sqlite3` is retained; no database reset is required.
+
+For ChoreTest staging:
+
+1. Advance the `test` branch to the desired commit.
+2. Confirm the GitHub Actions build for `ghcr.io/kevinatlee/chore:test` completed
+   successfully.
+3. In Unraid, use **Force Update** on ChoreTest.
+4. Confirm the container becomes healthy and review its logs.
+
+At production startup, the entrypoint backs up the existing database when one is present,
+runs `python manage.py migrate --noinput`, collects static files, and starts the production
+scheduler plus Gunicorn. On a brand-new empty appdata directory, migrations create the
+database and the scheduler creates the first valid backup after startup.
+
+At ChoreTest startup, the entrypoint first copies the newest valid production backup from
+the configured read-only mount into `/mnt/user/appdata/ChoreTest/db.sqlite3`. It then applies
+candidate migrations to that copy, collects static files, and starts Gunicorn. Existing
+ChoreTest database changes are intentionally replaced on every container start or
+recreation.
 
 ## Production-safe configuration updates
 
@@ -134,25 +140,17 @@ Comments for Incomplete Tasks, and report deliveries remain intact. Life Skills 
 reusable Morning task list, while the Shift Assignment is available Monday–Friday only;
 weekend Life Skills history remains stored but is excluded from normal reporting.
 
-Run the normal update from the repository checkout, then rerun the idempotent seed so the
-active administrative configuration exactly matches the authoritative source:
-
-```sh
-docker compose -f compose.production.yml pull
-docker compose -f compose.production.yml up -d
-docker compose -f compose.production.yml exec chore python manage.py seed_development
-```
-
-Normal startup creates a safe backup and applies migrations without deleting the database.
-Use `--reset-passwords` only when intentionally applying the configured operational password;
-it is not required for configuration reconciliation.
+Normal Force Update startup creates a safe backup and applies migrations without deleting
+the database. Migration 0009 performs the active configuration corrections in place, so
+`seed_development` is not required after a normal container update. Use that command only
+for a new empty installation or an intentional administrative reconciliation. Use
+`--reset-passwords` only when intentionally applying the configured operational password.
 
 ## Cloudflare Tunnel
 
-Create two public hostnames in Cloudflare Tunnel:
-
-- production FQDN to `http://UNRAID_LAN_IP:8000`
-- test FQDN to `http://UNRAID_LAN_IP:8001`
+Create two public hostnames in Cloudflare Tunnel, each targeting the host port configured
+in its Unraid template. The production template currently defaults to host port `4523` for
+container port `8000`; ChoreTest uses its separately configured host port.
 
 The external connection must be HTTPS. Preserve the public Host header (or explicitly set
 the HTTP Host header to the corresponding `APP_FQDN`) and pass
@@ -188,22 +186,20 @@ never modified and the live production database is not mounted into ChoreTest.
 
 ## Restore production
 
-Choose a backup from `/mnt/user/appdata/Chore/backups/`, then stop production before
-replacing its database:
+Choose a backup from `/mnt/user/appdata/Chore/backups/`, then use the Unraid interface to
+stop Chore before replacing its database. From an Unraid terminal:
 
 ```sh
-docker compose -f compose.production.yml down
 cp /mnt/user/appdata/Chore/db.sqlite3 /mnt/user/appdata/Chore/db.sqlite3.before-restore
 cp /mnt/user/appdata/Chore/backups/chore-YYYY-MM-DD.sqlite3 /mnt/user/appdata/Chore/db.sqlite3.restore
 chown 1000:1000 /mnt/user/appdata/Chore/db.sqlite3.restore
 mv /mnt/user/appdata/Chore/db.sqlite3.restore /mnt/user/appdata/Chore/db.sqlite3
-docker compose -f compose.production.yml up -d
 ```
 
-Keep `db.sqlite3.before-restore` until the restored application has been verified. Startup
-applies migrations needed by the selected image. Restarting ChoreTest afterward refreshes
-it from the newest retained production backup, not directly from the just-restored live
-file.
+Start Chore again from the Unraid interface. Keep `db.sqlite3.before-restore` until the
+restored application has been verified. Startup applies migrations needed by the selected
+image. Restarting ChoreTest afterward refreshes it from the newest retained production
+backup, not directly from the just-restored live file.
 
 ## Health and troubleshooting
 
@@ -237,23 +233,16 @@ auto-healing service is installed.
 
 Pushes to `main` publish `ghcr.io/kevinatlee/chore:latest`. Pushes to the dedicated `test`
 branch publish `ghcr.io/kevinatlee/chore:test`. GitHub Actions uses the repository's
-`GITHUB_TOKEN`; no registry password is committed. Unraid remains operator-controlled:
-
-```sh
-docker compose -f compose.test.yml pull
-docker compose -f compose.test.yml up -d
-
-docker compose -f compose.production.yml pull
-docker compose -f compose.production.yml up -d
-```
+`GITHUB_TOKEN`; no registry password is committed. After the appropriate workflow succeeds,
+the operator deploys that tag with **Force Update** on the corresponding Unraid container.
 
 Promote and verify a candidate on ChoreTest before merging that commit to `main`. Record
-the tested image digest (`docker image inspect`) before promotion. For an application-image
-rollback, temporarily change the Compose image to that known-good immutable digest, pull,
-and recreate the container. If the rollback image cannot use the current schema, first
-follow the stopped-container database restore procedure with the matching pre-upgrade
-backup. Never run reverse migrations against the live database without a verified backup.
+the tested image digest before promotion. For an application-image rollback, edit the
+Unraid template repository field to the known-good immutable digest and apply/Force Update
+the container. If the rollback image cannot use the current schema, first follow the
+stopped-container database restore procedure with the matching pre-upgrade backup. Never
+run reverse migrations against the live database without a verified backup.
 
 Remaining manual operations are Cloudflare hostname creation, Gmail App Password creation,
-real env-file provisioning, appdata permissions, initial database copy, GHCR access when
-private, candidate promotion, and image/database rollback selection.
+Unraid template variable provisioning, appdata permissions, GHCR access when private,
+candidate promotion, Force Update, and image/database rollback selection.

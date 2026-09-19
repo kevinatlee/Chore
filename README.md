@@ -85,22 +85,23 @@ git diff --check main..HEAD
 
 ## Configuration updates
 
-Current configuration corrections are applied by normal, production-safe migrations. Do not delete or reset the database: existing Chore Lists, Task Entries, programming notes, comments, and sent-report history remain intact. After migrating, rerun the idempotent seed to reconcile the active authoritative configuration:
+Current configuration corrections are applied by normal, production-safe migrations. Do not delete or reset the database: existing Chore Lists, Task Entries, programming notes, comments, and sent-report history remain intact. Container startup applies migrations automatically and preserves persistent appdata. A normal production or ChoreTest update does not require `seed_development`; reserve it for a new empty installation or intentional administrative reconciliation.
 
 ```powershell
 python manage.py migrate
-python manage.py seed_development
 ```
 
 No database is deleted by normal application startup.
 
 ## Production deployment
 
-Phase 4 provides production and test Docker Compose deployments, GHCR `:latest` and
-`:test` image publishing, runtime FQDN/proxy security configuration, global test-email
-suppression, a database-aware healthcheck, and SQLite-safe daily backups. See
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for initial Unraid setup, Cloudflare Tunnel and
-Gmail configuration, ChoreTest refresh behavior, updates, restores, and rollback.
+Production and ChoreTest are Unraid template-managed containers using
+`ghcr.io/kevinatlee/chore:latest` and `ghcr.io/kevinatlee/chore:test`. GitHub Actions
+publishes the images, and the operator deploys a successful build with **Force Update** in
+Unraid. Container startup applies migrations automatically; ChoreTest also refreshes from
+the configured production backup mount. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for
+Cloudflare Tunnel and Gmail configuration, startup behavior, updates, restores, and
+rollback.
 
 ## Reporting and operations
 

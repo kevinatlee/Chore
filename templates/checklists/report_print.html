@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ program.name }} Chore Report · Chore{% endblock %}
+{% block title %}{{ program.name }} Chore Reports · Chore{% endblock %}
 {% block content %}
 <style>
   .print-segment { margin:2rem 0; }
@@ -20,7 +20,7 @@
 <header class="page-heading report-heading print-report-header">
   <div>
     <p class="eyebrow">{{ program.name }}</p>
-    <h1>Chore Report</h1>
+    <h1>Chore Reports</h1>
     <p>{{ period.start|date:"Y-m-d" }} through {{ period.end|date:"Y-m-d" }} · {{ totals.completion_percentage }}% Complete · {{ totals.completed }}/{{ totals.applicable }} Tasks Complete</p>
   </div>
   <div class="report-actions no-print">

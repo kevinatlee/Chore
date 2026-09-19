@@ -129,8 +129,8 @@ def build_report(*, program, period, filters=None):
             program=program,
             operational_date__range=(period.start, period.end),
         )
-        .select_related("category", "shift")
-        .order_by("operational_date", "category_name_snapshot", "shift_start_snapshot")
+        .select_related("definition", "category", "shift")
+        .order_by("operational_date", "definition__sort_order", "definition_id", "id")
     )
 
     category_id = _positive_int(filters.get("category"))

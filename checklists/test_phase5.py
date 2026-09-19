@@ -204,7 +204,17 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
         )
         self.assertContains(
             response,
-            "This Chore List is shared. Updates from coworkers appear automatically. By submitting a contribution, you confirm that the information entered accurately represents the work being reported.",
+            "Marking a task complete implies the work being reported is satisfactorily completed.",
+        )
+        self.assertContains(
+            response,
+            "These lists allow collaboration, updates from colleagues appear automatically.",
+        )
+        self.assertContains(response, 'class="shared-notice-line"', count=2)
+        self.assertNotContains(response, "This Chore List is shared.")
+        self.assertNotContains(
+            response,
+            "By submitting a contribution, you confirm that the information entered accurately represents the work being reported.",
         )
         self.assertNotContains(response, "Chore List selection")
         self.assertNotContains(response, "Recent Staff Contributions")
@@ -629,12 +639,15 @@ class ReportExportAndSeedTests(Phase5FixtureMixin, TestCase):
         self.assertContains(response, ">Report</a>")
         self.assertContains(response, ">Chore Reports</span>")
         self.assertContains(response, ">Tasks</span>")
+        self.assertContains(response, ">Complete</span>")
         self.assertNotContains(response, "<span>%</span>", html=True)
         printable = self.client.get(reverse("report-print"), {"date": self.operational_date})
         self.assertContains(printable, 'class="print-segment"')
         self.assertContains(printable, "page-break-before:always")
         self.assertNotContains(printable, ">Report</a>")
         self.assertContains(printable, ">Print / Save PDF</button>")
+        self.assertContains(printable, "<h1>Chore Reports</h1>", html=True)
+        self.assertNotContains(printable, "<h1>Chore Report</h1>", html=True)
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",

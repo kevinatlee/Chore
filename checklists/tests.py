@@ -558,7 +558,10 @@ class SharedChecklistSynchronizationTests(OperationalFixtureMixin, TestCase):
             {"date": self.operational_date, "staff": self.staff_b.pk},
         )
         self.assertEqual(detail_a.context["instance"].pk, detail_b.context["instance"].pk)
-        self.assertContains(detail_a, "This Chore List is shared.")
+        self.assertContains(
+            detail_a,
+            "Marking a task complete implies the work being reported is satisfactorily completed.",
+        )
         self.assertContains(detail_a, "checklist_sync.js")
 
         response_a = self._ajax_change(
@@ -689,6 +692,7 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertContains(response, '<button class="button primary" type="submit">Select Shift</button>', html=True)
         self.assertContains(response, 'min="2026-09-11"')
         self.assertContains(response, 'max="2026-09-18"')
+        self.assertContains(response, 'type="date"')
         self.assertContains(response, 'name="staff"')
         self.assertContains(response, "Alfred Sampare")
         self.assertContains(response, 'name="category"')

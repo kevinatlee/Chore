@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
+from django.template.loader import render_to_string
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
@@ -121,6 +122,61 @@ class ReportingFixtureMixin:
 
 
 class ReportCalculationTests(ReportingFixtureMixin, TestCase):
+    def ordered_definitions(self):
+        self.definition_a.sort_order = 40
+        self.definition_a.save(update_fields=("sort_order",))
+        front_desk = StaffCategory.objects.create(
+            program=self.program_a, name="Front Desk", slug="front-desk"
+        )
+        front_definition, _, _ = self._definition(front_desk, "Front Desk")
+        front_definition.sort_order = 10
+        front_definition.save(update_fields=("sort_order",))
+        awake_night = StaffCategory.objects.create(
+            program=self.program_a, name="Awake Night", slug="awake-night"
+        )
+        awake_definition, _, _ = self._definition(awake_night, "Awake Night")
+        awake_definition.sort_order = 60
+        awake_definition.save(update_fields=("sort_order",))
+        return front_definition, self.definition_a, awake_definition
+
+    def test_report_rows_follow_shift_assignment_order_not_position_name(self):
+        definitions = self.ordered_definitions()
+        for definition in definitions:
+            resolve_checklist(definition, self.operational_date)
+
+        rows = self.report_a()["rows"]
+
+        self.assertEqual(
+            [row["category"] for row in rows],
+            ["Front Desk", "Support", "Awake Night"],
+        )
+
+    def test_multi_day_report_orders_by_date_then_shift_assignment(self):
+        definitions = self.ordered_definitions()
+        second_date = self.operational_date + timedelta(days=1)
+        for operational_date in (self.operational_date, second_date):
+            for definition in definitions:
+                resolve_checklist(definition, operational_date)
+
+        rows = build_report(
+            program=self.program_a,
+            period=ReportPeriod(
+                "custom", self.operational_date, second_date, "two days"
+            ),
+        )["rows"]
+
+        self.assertEqual(
+            [(row["operational_date"], row["category"]) for row in rows],
+            [
+                (self.operational_date, "Front Desk"),
+                (self.operational_date, "Support"),
+                (self.operational_date, "Awake Night"),
+                (second_date, "Front Desk"),
+                (second_date, "Support"),
+                (second_date, "Awake Night"),
+            ],
+        )
+
     def test_completed_partial_na_and_multiple_contributors(self):
         instance = resolve_checklist(self.definition_a, self.operational_date)
         regular = instance.items.get(source_task=self.regular_a)
@@ -422,6 +478,7 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
             html=True,
         )
         self.assertContains(response, 'name="section"')
+        self.assertContains(response, 'type="date"')
         for label in ("Period", "Date", "Position", "Shift", "Staff", "Completion", "Section"):
             self.assertContains(response, f"<label>{label}", html=False)
         self.assertNotContains(response, 'name="month"')
@@ -456,6 +513,43 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.assertIn(".report-filter-row-primary, .report-filter-row-secondary { grid-template-columns: 1fr; }", css)
         self.assertIn(".report-table .report-date { min-width: 7.25rem; white-space: nowrap; }", css)
         self.assertIn("max-width: 100%", css)
+        self.assertIn('input[type="date"] {', css)
+        self.assertIn("display: block; width: 100%; max-width: 100%; min-width: 0;", css)
+        self.assertIn("height: 2.75rem;", css)
+        self.assertIn("text-align: left;", css)
+        self.assertIn('input[type="date"]::-webkit-date-and-time-value', css)
+        self.assertIn('input[type="date"]::-webkit-datetime-edit', css)
+
+    def test_report_summary_renders_percentage_and_complete_inline(self):
+        selected_date = self.operational_date
+        markup = render_to_string(
+            "checklists/report.html",
+            {
+                "program": self.program_a,
+                "period": ReportPeriod(
+                    "daily", selected_date, selected_date, "fixture", selected_date
+                ),
+                "totals": {
+                    "checklists": 7,
+                    "completed": 163,
+                    "applicable": 221,
+                    "completion_percentage": 73.8,
+                },
+                "rows": [],
+                "filters": {},
+                "available_programs": Program.objects.filter(pk=self.program_a.pk),
+                "category_choices": [],
+                "shift_choices": [],
+                "staff_choices": [],
+                "section_choices": [],
+                "shift_options_by_position": {},
+                "query_string": "",
+            },
+        )
+
+        self.assertIn("<strong>73.8%</strong><span>Complete</span>", markup)
+        self.assertEqual(markup.count("73.8%"), 1)
+        self.assertNotIn("<span>%</span>", markup)
 
     def test_full_year_mock_history_remains_reportable_to_manager_and_admin(self):
         historical_date = self.operational_date - timedelta(days=364)

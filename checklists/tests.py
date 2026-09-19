@@ -2,6 +2,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time, timedelta
 from io import StringIO
+from pathlib import Path
 from threading import Barrier
 from unittest.mock import call, patch
 
@@ -761,8 +762,7 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
             f'<option value="{self.staff_b.pk}" selected>Chelsea Brown</option>',
             html=True,
         )
-        self.assertContains(response, "position.addEventListener")
-        self.assertContains(response, "shift.replaceChildren")
+        self.assertContains(response, "dashboard_selector.js")
         self.assertNotContains(response, "window.location='/checklists/?category=")
         self.assertEqual(
             list(response.context["selected_definitions"].values_list("shift__name", flat=True)),
@@ -1203,6 +1203,62 @@ class SeedCorrectionTests(TestCase):
             ["Morning", "Evening"],
         )
         self.assertNotContains(response, ">Night</option>")
+
+    def test_dashboard_date_query_recalculates_life_skills_and_preserves_staff(self):
+        operator = get_user_model().objects.get(username="sonderhouse")
+        staff = StaffMember.objects.first()
+        life_skills = StaffCategory.objects.get(slug="life-skills")
+        self.client.force_login(operator)
+
+        friday = self.client.get(
+            reverse("dashboard"),
+            {
+                "date": "2026-09-18",
+                "staff": staff.pk,
+                "category": life_skills.pk,
+            },
+        )
+        self.assertEqual(friday.status_code, 200)
+        self.assertEqual(friday.context["operational_date"], date(2026, 9, 18))
+        self.assertEqual(friday.context["selected_staff_id"], staff.pk)
+        self.assertEqual(friday.context["selected_category_id"], life_skills.pk)
+        self.assertIn(
+            "Life Skills",
+            [category.name for category in friday.context["categories"]],
+        )
+
+        saturday = self.client.get(
+            reverse("dashboard"),
+            {
+                "date": "2026-09-19",
+                "staff": staff.pk,
+                "category": life_skills.pk,
+            },
+        )
+        self.assertEqual(saturday.status_code, 200)
+        self.assertEqual(saturday.context["operational_date"], date(2026, 9, 19))
+        self.assertEqual(saturday.context["selected_staff_id"], staff.pk)
+        self.assertNotEqual(saturday.context["selected_category_id"], life_skills.pk)
+        self.assertNotIn(
+            "Life Skills",
+            [category.name for category in saturday.context["categories"]],
+        )
+
+    def test_dashboard_date_refresh_uses_committed_change_event(self):
+        operator = get_user_model().objects.get(username="sonderhouse")
+        self.client.force_login(operator)
+        response = self.client.get(reverse("dashboard"), {"date": "2026-09-18"})
+        self.assertContains(response, 'data-dashboard-url="/checklists/"')
+        self.assertContains(response, "dashboard_selector.js")
+
+        script = (
+            Path(__file__).parent / "static" / "checklists" / "dashboard_selector.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn('date.addEventListener("change", refreshDashboard)', script)
+        self.assertNotIn('date.addEventListener("input"', script)
+        self.assertIn('window.location.assign(', script)
+        self.assertIn('["staff", "category", "shift", "program"]', script)
+        self.assertNotIn("form.submit", script)
 
     def test_seed_rerun_is_stable(self):
         ids = {

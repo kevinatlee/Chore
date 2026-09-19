@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Select your Shift · Chore{% endblock %}
 {% block content %}
   <div class="page-heading">
@@ -8,7 +9,7 @@
     </div>
   </div>
 
-  <form method="get" action="{% url 'open-checklist' %}" class="selector-card stacked-form" id="checklist-selector">
+  <form method="get" action="{% url 'open-checklist' %}" class="selector-card stacked-form" id="checklist-selector" data-dashboard-url="{% url 'dashboard' %}">
     {% if available_programs.count > 1 %}
       <label for="program">Program</label>
       <select id="program" name="program" onchange="window.location='{% url 'dashboard' %}?program='+this.value">{% for choice in available_programs %}<option value="{{ choice.pk }}" {% if choice.pk == program.pk %}selected{% endif %}>{{ choice.name }}</option>{% endfor %}</select>
@@ -37,21 +38,6 @@
   </form>
 
   {{ shift_options_by_category|json_script:"position-shift-options" }}
-  <script>
-    (() => {
-      const position = document.getElementById("category");
-      const shift = document.getElementById("shift");
-      const choices = JSON.parse(document.getElementById("position-shift-options").textContent);
-      const updateShiftChoices = () => {
-        const previousShift = shift.value;
-        shift.replaceChildren(
-          ...(choices[position.value] || []).map(
-            choice => new Option(choice.name, choice.id, false, String(choice.id) === previousShift)
-          )
-        );
-      };
-      position.addEventListener("change", updateShiftChoices);
-    })();
-  </script>
+  <script src="{% static 'checklists/dashboard_selector.js' %}" defer></script>
 
 {% endblock %}

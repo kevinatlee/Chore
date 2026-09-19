@@ -5,6 +5,7 @@ from pathlib import Path
 from threading import Barrier
 
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.messages import get_messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core import mail
 from django.core.management import call_command
@@ -282,7 +283,10 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
             reverse("update-discrepancy", args=(instance.pk,)),
             {"staff": self.staff_a.pk, "explanation": "   \r\n  "},
         )
-        self.assertRedirects(response, reverse("dashboard"))
+        self.assertRedirects(
+            response, reverse("dashboard"), fetch_redirect_response=False
+        )
+        self.assertEqual(list(get_messages(response.wsgi_request)), [])
         existing.refresh_from_db()
         self.assertEqual(existing.explanation, "Keep this comment")
 
@@ -290,7 +294,10 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
             reverse("update-discrepancy", args=(instance.pk,)),
             {"staff": self.staff_b.pk, "explanation": "\t"},
         )
-        self.assertRedirects(response, reverse("dashboard"))
+        self.assertRedirects(
+            response, reverse("dashboard"), fetch_redirect_response=False
+        )
+        self.assertEqual(list(get_messages(response.wsgi_request)), [])
         self.assertFalse(
             DiscrepancyExplanation.objects.filter(
                 instance=instance, staff=self.staff_b
@@ -301,9 +308,32 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
             reverse("update-discrepancy", args=(instance.pk,)),
             {"staff": self.staff_a.pk, "explanation": "Saved update"},
         )
-        self.assertRedirects(response, reverse("dashboard"))
+        self.assertRedirects(
+            response, reverse("dashboard"), fetch_redirect_response=False
+        )
+        queued_messages = [
+            str(message) for message in get_messages(response.wsgi_request)
+        ]
+        self.assertEqual(queued_messages, [])
+        self.assertNotIn("Comments for Incomplete Tasks saved.", queued_messages)
         existing.refresh_from_db()
         self.assertEqual(existing.explanation, "Saved update")
+
+    def test_task_update_success_message_is_unchanged(self):
+        instance = resolve_checklist(self.assignment, self.operational_date)
+        item = instance.items.get(source_task=self.normal_task)
+        self.client.force_login(self.operator)
+
+        response = self.client.post(
+            reverse("update-item-state", args=(item.pk,)),
+            {"staff": self.staff_a.pk, "state": TaskState.COMPLETED},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            [str(message) for message in get_messages(response.wsgi_request)],
+            ["Task updated and Staff Contribution recorded."],
+        )
 
     def test_discrepancy_authorization_rejects_cross_program_actor_and_staff(self):
         instance = resolve_checklist(self.assignment, self.operational_date)

@@ -402,7 +402,7 @@ def update_discrepancy(request, instance_id):
         is_active=True,
     )
     try:
-        comment = save_discrepancy_explanation(
+        save_discrepancy_explanation(
             instance=instance,
             actor=request.user,
             staff_member=staff_member,
@@ -410,8 +410,6 @@ def update_discrepancy(request, instance_id):
         )
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
-    if comment is not None:
-        messages.success(request, "Comments for Incomplete Tasks saved.")
     return redirect(reverse("dashboard"))
 
 

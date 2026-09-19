@@ -526,6 +526,12 @@ class ReportSecurityAndExportTests(ReportingFixtureMixin, TestCase):
         self.assertIn(".report-table .report-date { min-width: 7.25rem; white-space: nowrap; }", css)
         self.assertIn("max-width: 100%", css)
         self.assertIn(".date-control { width: 100%; max-width: 100%; min-width: 0; }", css)
+        self.assertIn("--control-height: 2.75rem;", css)
+        self.assertIn(
+            "select { height: var(--control-height); min-height: var(--control-height);",
+            css,
+        )
+        self.assertIn("height: var(--control-height);", css)
         self.assertIn("@media (hover: none) and (pointer: coarse)", css)
         self.assertIn(".date-control-display {", css)
         self.assertIn(".date-control-input {", css)

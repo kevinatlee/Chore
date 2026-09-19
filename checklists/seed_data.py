@@ -191,10 +191,10 @@ ASSIGNMENTS = [
     ("front-desk", "morning", "Front Desk Morning", 10, FRONT_DESK_MORNING),
     ("front-desk", "evening", "Front Desk Evening", 20, FRONT_DESK_EVENING),
     ("front-desk", "night", "Front Desk Night", 30, FRONT_DESK_NIGHT),
-    ("support", "morning", "Support Morning", 10, SUPPORT_MORNING),
-    ("support", "evening", "Support Evening", 20, SUPPORT_EVENING),
-    ("awake-night", "night", "Awake Night", 10, AWAKE_NIGHT),
-    ("life-skills", "morning", "Life Skills Morning", 10, LIFE_SKILLS),
+    ("support", "morning", "Support Morning", 40, SUPPORT_MORNING),
+    ("support", "evening", "Support Evening", 50, SUPPORT_EVENING),
+    ("awake-night", "night", "Awake Night", 60, AWAKE_NIGHT),
+    ("life-skills", "morning", "Life Skills Morning", 70, LIFE_SKILLS),
 ]
 
 PROGRAMMING_TASK_LABEL = "Complete programming and fill out programming report"

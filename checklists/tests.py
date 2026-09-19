@@ -654,10 +654,11 @@ class AdministrationClarityTests(OperationalFixtureMixin, TestCase):
         super().setUp()
         self.client.force_login(self.admin)
 
-    def test_admin_configuration_explains_consequences_and_routing(self):
+    def test_admin_header_is_compact_and_keeps_configuration_export(self):
         index = self.client.get(reverse("admin:index"))
-        self.assertContains(index, "Configuration affects future Chore Lists.")
-        self.assertContains(index, "preserving historical Chore Lists")
+        self.assertNotContains(index, "Configuration affects future Chore Lists.")
+        self.assertNotContains(index, "preserving historical Chore Lists")
+        self.assertNotContains(index, "Chore configuration and reporting")
 
         task_page = self.client.get(reverse("admin:checklists_taskdefinition_add"))
         self.assertContains(task_page, "Allow N/A")
@@ -665,6 +666,14 @@ class AdministrationClarityTests(OperationalFixtureMixin, TestCase):
         self.assertContains(task_page, "admin_clarity.js")
         self.assertContains(index, "Export Configuration")
         self.assertNotContains(index, "Groups")
+
+    def test_shift_assignment_admin_exposes_editable_sort_order(self):
+        response = self.client.get(
+            reverse("admin:checklists_checklistdefinition_changelist")
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Sort order")
+        self.assertContains(response, 'name="form-0-sort_order"')
 
 
 class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
@@ -1025,6 +1034,18 @@ class SeedCorrectionTests(TestCase):
                 ("Awake Night", "Night"),
                 ("Life Skills", "Morning"),
             },
+        )
+        self.assertEqual(
+            list(ChecklistDefinition.objects.values_list("name", "sort_order")),
+            [
+                ("Front Desk Morning", 10),
+                ("Front Desk Evening", 20),
+                ("Front Desk Night", 30),
+                ("Support Morning", 40),
+                ("Support Evening", 50),
+                ("Awake Night", 60),
+                ("Life Skills Morning", 70),
+            ],
         )
         for category_key, shift_key, _, _, expected_sections in ASSIGNMENTS:
             definition = ChecklistDefinition.objects.get(

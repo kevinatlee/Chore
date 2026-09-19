@@ -1,6 +1,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time
+from pathlib import Path
 from threading import Barrier
 
 from django.contrib.auth import authenticate, get_user_model
@@ -342,6 +343,86 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
         )
 
 
+class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.normal_task.allow_na = True
+        self.normal_task.save(update_fields=("allow_na",))
+        self.instance = resolve_checklist(self.assignment, self.operational_date)
+        self.client.force_login(self.operator)
+
+    def render_checklist(self):
+        return self.client.get(
+            reverse("checklist-detail", args=(self.assignment.pk,)),
+            {"date": self.operational_date, "staff": self.staff_a.pk},
+        )
+
+    def test_chore_list_copy_programming_and_discrepancy_layout_markup(self):
+        response = self.render_checklist()
+        programming_item = self.instance.items.get(source_task=self.programming_task)
+
+        self.assertContains(response, "<span>Complete</span>", html=True)
+        self.assertNotContains(response, "<span>resolved</span>", html=True)
+        self.assertNotContains(response, "Programming activity (required to complete)")
+        self.assertContains(response, 'name="activity_text"')
+        self.assertContains(response, f'form="task-form-{programming_item.pk}"')
+        content = response.content.decode()
+        programming_card = content[
+            content.index(f'data-item-id="{programming_item.pk}"'):
+            content.index("</article>", content.index(f'data-item-id="{programming_item.pk}"'))
+        ]
+        self.assertLess(
+            programming_card.index("Complete programming and fill out programming report"),
+            programming_card.index('name="activity_text"'),
+        )
+        self.assertLess(
+            programming_card.index('name="activity_text"'),
+            programming_card.index("data-item-status"),
+        )
+        self.assertContains(response, "<h2>Discrepancy Explanation</h2>", html=True)
+        self.assertNotContains(
+            response,
+            "Explain any incomplete, unusual, or otherwise discrepant work for your contribution to this Chore List.",
+        )
+        self.assertNotContains(response, '<label for="discrepancy-explanation">')
+        self.assertContains(response, 'aria-label="Discrepancy Explanation"')
+
+    def test_initial_and_synchronized_actions_put_na_first(self):
+        response = self.render_checklist()
+        optional_item = self.instance.items.get(source_task=self.normal_task)
+        content = response.content.decode()
+        start = content.index(f'data-item-id="{optional_item.pk}"')
+        card = content[start:content.index("</article>", start)]
+        self.assertLess(card.index('value="na"'), card.index('value="completed"'))
+
+        change_item_state(
+            item_id=optional_item.pk,
+            actor=self.operator,
+            staff_member=self.staff_a,
+            new_state=TaskState.COMPLETED,
+        )
+        content = self.render_checklist().content.decode()
+        start = content.index(f'data-item-id="{optional_item.pk}"')
+        card = content[start:content.index("</article>", start)]
+        self.assertLess(card.index('value="na"'), card.index('value="pending"'))
+
+        sync_source = (
+            Path(__file__).parent / "static" / "checklists" / "checklist_sync.js"
+        ).read_text(encoding="utf-8")
+        refresh_actions = sync_source[
+            sync_source.index("const refreshActions"):
+            sync_source.index("const applyItem")
+        ]
+        self.assertLess(
+            refresh_actions.index('makeButton("N/A"'),
+            refresh_actions.index('makeButton("Complete"'),
+        )
+        self.assertLess(
+            refresh_actions.index('makeButton("Complete"'),
+            refresh_actions.index('makeButton("Reset"'),
+        )
+
+
 class ConcurrentDiscrepancyTests(Phase5FixtureMixin, TransactionTestCase):
     reset_sequences = True
 
@@ -546,10 +627,14 @@ class ReportExportAndSeedTests(Phase5FixtureMixin, TestCase):
         self.assertNotContains(response, "<th>Pending</th>", html=True)
         self.assertNotContains(response, "<th>N/A</th>", html=True)
         self.assertContains(response, ">Report</a>")
+        self.assertContains(response, ">Chore Reports</span>")
+        self.assertContains(response, ">Tasks</span>")
+        self.assertNotContains(response, "<span>%</span>", html=True)
         printable = self.client.get(reverse("report-print"), {"date": self.operational_date})
         self.assertContains(printable, 'class="print-segment"')
         self.assertContains(printable, "page-break-before:always")
-        self.assertContains(printable, ">Report</a>")
+        self.assertNotContains(printable, ">Report</a>")
+        self.assertContains(printable, ">Print / Save PDF</button>")
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",

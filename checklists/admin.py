@@ -27,7 +27,7 @@ from .presentation import display_task_text
 
 admin.site.site_header = "Chore administration"
 admin.site.site_title = "Chore admin"
-admin.site.index_title = "Chore configuration and reporting"
+admin.site.index_title = ""
 if Group in admin.site._registry:
     admin.site.unregister(Group)
 
@@ -122,7 +122,8 @@ class ShiftAdmin(ActiveConfigurationAdminMixin, admin.ModelAdmin):
 
 @admin.register(ChecklistDefinition)
 class ChecklistDefinitionAdmin(ActiveConfigurationAdminMixin, admin.ModelAdmin):
-    list_display = ("name", "category", "shift", "section_count", "availability")
+    list_display = ("name", "category", "shift", "sort_order", "section_count", "availability")
+    list_editable = ("sort_order",)
     list_filter = ("category__program", "category", "shift", "is_active")
     search_fields = ("name", "category__name", "shift__name")
     inlines = (AssignmentSectionInline,)

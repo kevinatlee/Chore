@@ -20,7 +20,7 @@
     </div>
     <div class="progress-summary">
       <strong><span id="resolved-count">{{ completed_count }}</span> / <span id="total-count">{{ total_count }}</span></strong>
-      <span>resolved</span>
+      <span>Complete</span>
     </div>
   </div>
 
@@ -44,6 +44,16 @@
                 {% endif %}
                 <h3>{{ item.task_label_snapshot|task_text }}</h3>
               </div>
+              {% if item.requires_completion_note_snapshot %}
+                <textarea
+                  class="programming-activity-input"
+                  name="activity_text"
+                  rows="1"
+                  placeholder="Describe the programming activity"
+                  aria-label="Programming activity"
+                  form="task-form-{{ item.id }}"
+                ></textarea>
+              {% endif %}
               <div class="task-attribution">
                 <span class="status status-{{ item.current_state }}" data-item-status>{{ item.get_current_state_display }}</span>
                 {% if show_audit %}
@@ -61,22 +71,18 @@
               method="post"
               action="{% url 'update-item-state' item.id %}"
               class="task-actions"
+              id="task-form-{{ item.id }}"
               data-item-form
               data-allow-na="{{ item.allow_na_snapshot|yesno:'true,false' }}"
             >
               {% csrf_token %}
               <input type="hidden" name="date" value="{{ instance.operational_date|date:'Y-m-d' }}">
               <input type="hidden" name="staff" value="{{ staff_member.pk }}">
-              {% if item.requires_completion_note_snapshot %}
-                <label class="programming-note">Programming activity (required to complete)
-                  <textarea name="activity_text" rows="3" placeholder="Describe the programming activity"></textarea>
-                </label>
+              {% if item.allow_na_snapshot and item.current_state != 'na' %}
+                <button class="button na" type="submit" name="state" value="na">N/A</button>
               {% endif %}
               {% if item.current_state != 'completed' %}
                 <button class="button complete" type="submit" name="state" value="completed">Complete</button>
-              {% endif %}
-              {% if item.allow_na_snapshot and item.current_state != 'na' %}
-                <button class="button na" type="submit" name="state" value="na">N/A</button>
               {% endif %}
               {% if item.current_state != 'pending' %}
                 <button class="button reset" type="submit" name="state" value="pending">Reset</button>
@@ -94,13 +100,11 @@
   {% endfor %}
 
   <section class="discrepancy-panel">
-    <h2>Discrepancy explanation</h2>
-    <p>Explain any incomplete, unusual, or otherwise discrepant work for your contribution to this Chore List.</p>
-    <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="stacked-form">
+    <h2>Discrepancy Explanation</h2>
+    <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="discrepancy-form">
       {% csrf_token %}
       <input type="hidden" name="staff" value="{{ staff_member.pk }}">
-      <label for="discrepancy-explanation">Discrepancy explanation</label>
-      <textarea id="discrepancy-explanation" name="explanation" rows="5" required>{{ discrepancy.explanation }}</textarea>
+      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Discrepancy Explanation" required>{{ discrepancy.explanation }}</textarea>
       <button class="button primary" type="submit">Submit</button>
     </form>
   </section>

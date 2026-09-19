@@ -12,14 +12,6 @@
   <link rel="stylesheet" href="{% static 'checklists/admin_clarity.css' %}">
 {% endblock %}
 
-{% block nav-global %}
-  <div class="admin-context">
-    <strong>Configuration affects future Chore Lists.</strong>
-    <span>Deactivate items to stop new use while preserving historical Chore Lists, Task Entries, and reports.</span>
-    <a class="admin-export-link" href="{% url 'export-configuration' %}">Export Configuration</a>
-  </div>
-{% endblock %}
-
 {% block userlinks %}
   <a href="{% url 'export-configuration' %}">Export Configuration</a> /
   {{ block.super }}

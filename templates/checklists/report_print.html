@@ -2,7 +2,6 @@
 {% block title %}{{ program.name }} Chore Report · Chore{% endblock %}
 {% block content %}
 <style>
-  .print-toolbar { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:1.5rem; }
   .print-segment { margin:2rem 0; }
   .print-segment .report-table { font-size:10pt; }
   @media print {
@@ -14,26 +13,30 @@
     .print-segment { break-before:page; page-break-before:always; margin:0; }
     .print-segment:first-of-type { break-before:auto; page-break-before:auto; }
     .print-segment:last-child { break-after:auto; page-break-after:auto; }
+    .print-table-wrap { overflow:visible; border:0; border-radius:0; }
     .report-table th, .report-table td { white-space:normal; }
   }
 </style>
-<div class="print-toolbar no-print">
-  <a class="button secondary" href="{% url 'reports' %}?{{ query_string }}">Report</a>
-  <button class="button primary" type="button" onclick="window.print()">Print / Save PDF</button>
-</div>
-<header class="print-report-header">
-  <p class="eyebrow">{{ program.name }}</p>
-  <h1>Chore Report</h1>
-  <p>{{ period.start|date:"Y-m-d" }} through {{ period.end|date:"Y-m-d" }} · {{ totals.completion_percentage }}% Complete · {{ totals.completed }}/{{ totals.applicable }} Tasks Complete</p>
+<header class="page-heading report-heading print-report-header">
+  <div>
+    <p class="eyebrow">{{ program.name }}</p>
+    <h1>Chore Report</h1>
+    <p>{{ period.start|date:"Y-m-d" }} through {{ period.end|date:"Y-m-d" }} · {{ totals.completion_percentage }}% Complete · {{ totals.completed }}/{{ totals.applicable }} Tasks Complete</p>
+  </div>
+  <div class="report-actions no-print">
+    <button class="button primary" type="button" onclick="window.print()">Print / Save PDF</button>
+  </div>
 </header>
 {% for row in rows %}
   <section class="print-segment">
     <h2>{{ row.operational_date|date:"Y-m-d" }} · {{ row.shift }} · {{ row.category }}</h2>
     <p>{{ row.completed_count }}/{{ row.applicable_count }} Tasks · {{ row.completion_percentage }}%</p>
-    <table class="report-table">
-      <thead><tr><th>Section</th><th>Task</th><th>State</th><th>Task entry</th></tr></thead>
-      <tbody>{% for task in row.filtered_tasks %}<tr><td>{{ task.section }}</td><td>{{ task.label }}</td><td>{{ task.state_label }}</td><td>{% if task.contributor %}{{ task.contributor }} · {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}None{% endif %}{% for entry in task.contributions %}{% if entry.activity_text %}<br><strong>Programming:</strong> {{ entry.activity_text }}{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody>
-    </table>
+    <div class="table-wrap print-table-wrap">
+      <table class="report-table">
+        <thead><tr><th>Section</th><th>Task</th><th>State</th><th>Task entry</th></tr></thead>
+        <tbody>{% for task in row.filtered_tasks %}<tr><td>{{ task.section }}</td><td>{{ task.label }}</td><td>{{ task.state_label }}</td><td>{% if task.contributor %}{{ task.contributor }} · {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}None{% endif %}{% for entry in task.contributions %}{% if entry.activity_text %}<br><strong>Programming:</strong> {{ entry.activity_text }}{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
     {% if row.discrepancies %}<h3>Discrepancy explanations</h3><ul>{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}:</strong> {{ discrepancy.explanation }}</li>{% endfor %}</ul>{% endif %}
   </section>
 {% empty %}<div class="empty-state">No matching operational Chore Lists.</div>{% endfor %}

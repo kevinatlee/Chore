@@ -32,10 +32,10 @@
     const form = card.querySelector("[data-item-form]");
     if (!form) return;
     form.querySelectorAll("button").forEach(button => button.remove());
-    if (state !== "completed") form.append(makeButton("Complete", "completed", "complete"));
     if (form.dataset.allowNa === "true" && state !== "na") {
       form.append(makeButton("N/A", "na", "na"));
     }
+    if (state !== "completed") form.append(makeButton("Complete", "completed", "complete"));
     if (state !== "pending") form.append(makeButton("Reset", "pending", "reset"));
     if (card.classList.contains("is-saving")) {
       form.querySelectorAll("button").forEach(button => { button.disabled = true; });
@@ -123,7 +123,7 @@
     const submitter = event.submitter;
     if (!form || !submitter || !submitter.value) return;
     event.preventDefault();
-    const activity = form.querySelector('[name="activity_text"]');
+    const activity = form.closest("[data-item-id]").querySelector('[name="activity_text"]');
     if (submitter.value === "completed" && activity && !activity.value.trim()) {
       activity.setCustomValidity("Describe the programming activity before completing this task.");
       activity.reportValidity();

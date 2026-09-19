@@ -72,7 +72,7 @@ select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #aab6bd; 
   background: var(--brand-light); border: 1px solid #bad8d1; border-radius: .65rem;
 }
 .shared-workflow-notice strong, .shared-workflow-notice span { display: block; }
-.shared-workflow-notice > div > span { color: #45615c; font-size: .88rem; }
+.shared-workflow-notice > div > span { color: #45615c; font-size: 1rem; }
 .sync-status { flex: 0 0 auto; padding: .25rem .6rem; color: var(--brand); background: white; border-radius: 999px; font-size: .78rem; font-weight: 800; }
 .sync-status.sync-error { color: var(--danger); background: #fde8e8; }
 .sync-status.sync-saving { color: var(--na); background: var(--na-light); }
@@ -84,7 +84,7 @@ select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #aab6bd; 
 .task-card.state-completed { border-left-color: var(--complete); background: #fbfefc; }
 .task-card.state-na { border-left-color: var(--na); background: #fffdf7; }
 .task-card.is-saving { opacity: .72; }
-.task-copy { min-width: 0; }
+.task-copy { flex: 1 1 auto; min-width: 0; }
 .task-line { display: flex; gap: .8rem; align-items: baseline; }
 .task-line h3 { margin-bottom: .35rem; font-size: 1rem; }
 .task-time { flex: 0 0 auto; color: var(--brand); font-size: .8rem; font-weight: 800; }
@@ -108,8 +108,7 @@ select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #aab6bd; 
 .report-filters .checkbox-label input { min-height: auto; }
 .filter-actions { align-self: end; }
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; margin-bottom: 1.5rem; }
-.summary-grid > div { padding: 1rem; background: var(--brand-light); border-radius: .65rem; }
-.summary-grid strong, .summary-grid span { display: block; }
+.summary-grid > div { display: flex; align-items: baseline; justify-content: center; gap: .55rem; padding: 1rem; background: var(--brand-light); border-radius: .65rem; }
 .summary-grid strong { font-size: 1.4rem; }
 .summary-grid span { color: var(--muted); font-size: .8rem; }
 .table-wrap { overflow-x: auto; background: white; border: 1px solid var(--line); border-radius: .7rem; }
@@ -118,12 +117,12 @@ select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #aab6bd; 
 .report-table th { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
 .report-table tr:last-child td { border-bottom: 0; }
 .report-table .report-date { min-width: 7.25rem; white-space: nowrap; }
-.task-actions { display: flex; flex: 0 1 32rem; flex-wrap: wrap; gap: .45rem; }
-.programming-note { flex: 1 0 100%; color: var(--ink); font-size: .84rem; font-weight: 700; }
-.programming-note textarea { display: block; width: min(30rem, 100%); margin-top: .35rem; resize: vertical; }
+.task-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: .45rem; margin-left: auto; }
+.programming-activity-input { display: block; width: min(32rem, 100%); min-height: 2.75rem; margin: .25rem 0 .5rem; resize: vertical; }
 .discrepancy-panel { margin-top: 3rem; }
-.discrepancy-panel textarea { width: 100%; margin-bottom: 1rem; resize: vertical; }
-.discrepancy-panel .button { justify-self: start; }
+.discrepancy-form { display: flex; align-items: stretch; gap: .65rem; }
+.discrepancy-form textarea { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 3.25rem; resize: vertical; }
+.discrepancy-form .button { flex: 0 0 auto; align-self: stretch; }
 .task-actions button:disabled { cursor: wait; opacity: .65; }
 .button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid #2e8172; outline-offset: 2px;
@@ -141,8 +140,10 @@ select { min-height: 2.75rem; padding: .55rem .7rem; border: 1px solid #aab6bd; 
   .date-form { min-width: 0; margin-top: 1.25rem; }
   .field-row { flex-wrap: wrap; }
   .task-card { display: block; }
-  .task-actions { margin-top: .9rem; flex-wrap: wrap; }
+  .task-actions { margin: .9rem 0 0; flex-wrap: wrap; justify-content: flex-end; }
   .task-actions .button { flex: 1; }
+  .discrepancy-form { flex-direction: column; }
+  .discrepancy-form .button { align-self: auto; }
   .progress-summary { display: inline-block; margin-top: 1rem; }
   .shared-workflow-notice { display: block; margin-top: 0; }
   .sync-status { display: inline-block; margin-top: .7rem; }

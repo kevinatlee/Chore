@@ -1,6 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, time
+from datetime import date, time, timedelta
 from pathlib import Path
 from threading import Barrier
 
@@ -268,6 +268,43 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
             ["Alice revised explanation", "Bob explanation"],
         )
 
+    def test_comment_posts_redirect_to_dashboard_and_blank_preserves_storage(self):
+        instance = resolve_checklist(self.assignment, self.operational_date)
+        existing = save_discrepancy_explanation(
+            instance=instance,
+            actor=self.operator,
+            staff_member=self.staff_a,
+            explanation="Keep this comment",
+        )
+        self.client.force_login(self.operator)
+
+        response = self.client.post(
+            reverse("update-discrepancy", args=(instance.pk,)),
+            {"staff": self.staff_a.pk, "explanation": "   \r\n  "},
+        )
+        self.assertRedirects(response, reverse("dashboard"))
+        existing.refresh_from_db()
+        self.assertEqual(existing.explanation, "Keep this comment")
+
+        response = self.client.post(
+            reverse("update-discrepancy", args=(instance.pk,)),
+            {"staff": self.staff_b.pk, "explanation": "\t"},
+        )
+        self.assertRedirects(response, reverse("dashboard"))
+        self.assertFalse(
+            DiscrepancyExplanation.objects.filter(
+                instance=instance, staff=self.staff_b
+            ).exists()
+        )
+
+        response = self.client.post(
+            reverse("update-discrepancy", args=(instance.pk,)),
+            {"staff": self.staff_a.pk, "explanation": "Saved update"},
+        )
+        self.assertRedirects(response, reverse("dashboard"))
+        existing.refresh_from_db()
+        self.assertEqual(existing.explanation, "Saved update")
+
     def test_discrepancy_authorization_rejects_cross_program_actor_and_staff(self):
         instance = resolve_checklist(self.assignment, self.operational_date)
         other_program = Program.objects.create(name="Other Program", slug="other-program")
@@ -389,13 +426,14 @@ class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
             programming_card.index('name="activity_text"'),
             programming_card.index("data-item-status"),
         )
-        self.assertContains(response, "<h2>Discrepancy Explanation</h2>", html=True)
+        self.assertContains(response, "<h2>Comments for Incomplete Tasks</h2>", html=True)
         self.assertNotContains(
             response,
             "Explain any incomplete, unusual, or otherwise discrepant work for your contribution to this Chore List.",
         )
         self.assertNotContains(response, '<label for="discrepancy-explanation">')
-        self.assertContains(response, 'aria-label="Discrepancy Explanation"')
+        self.assertContains(response, 'aria-label="Comments for Incomplete Tasks"')
+        self.assertNotContains(response, 'name="explanation" rows="2" aria-label="Comments for Incomplete Tasks" required')
 
     def test_initial_and_synchronized_actions_put_na_first(self):
         response = self.render_checklist()
@@ -432,6 +470,98 @@ class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
             refresh_actions.index('makeButton("Reset"'),
         )
 
+
+class WeekdayAvailabilityTests(Phase5FixtureMixin, TestCase):
+    monday = date(2026, 9, 14)
+    friday = date(2026, 9, 18)
+    saturday = date(2026, 9, 19)
+    sunday = date(2026, 9, 20)
+
+    def setUp(self):
+        super().setUp()
+        self.assignment.weekdays_only = True
+        self.assignment.save(update_fields=("weekdays_only",))
+
+    def test_weekdays_open_and_weekends_are_rejected(self):
+        self.assertEqual(resolve_checklist(self.assignment, self.monday).operational_date, self.monday)
+        self.assertEqual(resolve_checklist(self.assignment, self.friday).operational_date, self.friday)
+        for weekend_date in (self.saturday, self.sunday):
+            with self.subTest(operational_date=weekend_date):
+                with self.assertRaisesMessage(
+                    PermissionDenied, "not available on this date"
+                ):
+                    resolve_checklist(self.assignment, weekend_date)
+
+    def test_dashboard_and_direct_operational_paths_enforce_weekends(self):
+        self.client.force_login(self.operator)
+        dashboard = self.client.get(reverse("dashboard"), {"date": self.saturday})
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertNotContains(dashboard, f'value="{self.shift.pk}"')
+        opening = self.client.get(
+            reverse("open-checklist"),
+            {
+                "date": self.saturday,
+                "category": self.position.pk,
+                "shift": self.shift.pk,
+                "staff": self.staff_a.pk,
+            },
+        )
+        self.assertEqual(opening.status_code, 403)
+
+        self.assignment.weekdays_only = False
+        self.assignment.save(update_fields=("weekdays_only",))
+        historical = resolve_checklist(self.assignment, self.saturday)
+        item = historical.items.get(source_task=self.normal_task)
+        self.assignment.weekdays_only = True
+        self.assignment.save(update_fields=("weekdays_only",))
+
+        detail = self.client.get(
+            reverse("checklist-detail", args=(self.assignment.pk,)),
+            {"date": self.saturday, "staff": self.staff_a.pk},
+        )
+        self.assertEqual(detail.status_code, 403)
+        mutation = self.client.post(
+            reverse("update-item-state", args=(item.pk,)),
+            {"staff": self.staff_a.pk, "state": TaskState.COMPLETED},
+        )
+        self.assertEqual(mutation.status_code, 403)
+        comment = self.client.post(
+            reverse("update-discrepancy", args=(historical.pk,)),
+            {"staff": self.staff_a.pk, "explanation": "Weekend bypass"},
+        )
+        self.assertEqual(comment.status_code, 403)
+        self.assertFalse(DiscrepancyExplanation.objects.filter(instance=historical).exists())
+
+    def test_reports_exclude_only_weekend_weekdays_only_history(self):
+        self.assignment.weekdays_only = False
+        self.assignment.save(update_fields=("weekdays_only",))
+        invalid_weekend = resolve_checklist(self.assignment, self.saturday)
+        weekday = resolve_checklist(self.assignment, self.monday)
+        self.assignment.weekdays_only = True
+        self.assignment.save(update_fields=("weekdays_only",))
+
+        unrestricted_position = StaffCategory.objects.create(
+            program=self.program, name="Front Desk", slug="front-desk"
+        )
+        unrestricted = ChecklistDefinition.objects.create(
+            name="Front Desk Morning",
+            category=unrestricted_position,
+            shift=self.shift,
+        )
+        AssignmentSectionMembership.objects.create(
+            assignment=unrestricted, section=self.section, sort_order=10
+        )
+        valid_weekend = resolve_checklist(unrestricted, self.saturday)
+
+        report = build_report(
+            program=self.program,
+            period=ReportPeriod("weekly", self.monday, self.sunday, ""),
+        )
+        row_ids = {row["id"] for row in report["rows"]}
+        self.assertNotIn(invalid_weekend.pk, row_ids)
+        self.assertIn(weekday.pk, row_ids)
+        self.assertIn(valid_weekend.pk, row_ids)
+        self.assertEqual(report["totals"]["checklists"], 2)
 
 class ConcurrentDiscrepancyTests(Phase5FixtureMixin, TransactionTestCase):
     reset_sequences = True
@@ -524,7 +654,10 @@ class RoleAndAdminAuthorizationTests(Phase5FixtureMixin, TestCase):
             new_state=TaskState.COMPLETED,
         )
         self.client.force_login(self.manager)
-        response = self.client.get(reverse("report-detail", args=(instance.pk,)))
+        response = self.client.get(
+            reverse("report-detail", args=(instance.pk,)),
+            {"date": instance.operational_date},
+        )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.staff_b.display_name)
         self.assertContains(response, "Latest production contribution by")
@@ -708,6 +841,12 @@ class ReportExportAndSeedTests(Phase5FixtureMixin, TestCase):
         self.assertIn("shift_assignments", payload)
         self.assertIn("assignment_sections", payload)
         self.assertIn("section_tasks", payload)
+        life_export = next(
+            assignment
+            for assignment in payload["shift_assignments"]
+            if assignment["name"] == "Support Morning"
+        )
+        self.assertIn("weekdays_only", life_export)
         exported = response.content.decode()
         self.assertNotIn("SENSITIVE OPERATIONAL ACTIVITY", exported)
         self.assertNotIn("SENSITIVE DISCREPANCY", exported)
@@ -735,6 +874,10 @@ class ReportExportAndSeedTests(Phase5FixtureMixin, TestCase):
             self.assertEqual(len(actual), len({item.source_task_id for item in instance.items.all()}))
         life = ChecklistDefinition.objects.get(seed_key="definition-life-skills-morning")
         monday = list(resolve_checklist(life, date(2026, 9, 14)).items.values_list("task_label_snapshot", flat=True))
-        sunday = list(resolve_checklist(life, date(2026, 9, 20)).items.values_list("task_label_snapshot", flat=True))
-        self.assertEqual(monday, sunday)
+        friday = list(resolve_checklist(life, date(2026, 9, 18)).items.values_list("task_label_snapshot", flat=True))
+        self.assertEqual(monday, friday)
         self.assertEqual(len(monday), 28)
+        with self.assertRaises(PermissionDenied):
+            resolve_checklist(life, date(2026, 9, 19))
+        with self.assertRaises(PermissionDenied):
+            resolve_checklist(life, date(2026, 9, 20))

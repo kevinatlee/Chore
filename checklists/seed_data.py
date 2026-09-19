@@ -36,9 +36,9 @@ FRONT_OFFICE_COMMON = [
     N("Accept and sort mail"),
     T("Review IR binder, Communication Book, WISH, Inclusion, schedule, and DNA list"),
     T("Check and reply to emails"),
-    T("Complete leave requests and maintenance requests as needed"),
-    N("Complete Citation training as required"),
-    T("Photocopy and maintain an ample supply of paperwork"),
+    N("Complete leave requests and maintenance requests"),
+    N("Complete Citation training"),
+    N("Print and maintain an ample supply of paperwork"),
     N("Print needed forms"), T("Ensure printer is stocked with paper"),
     T("Monitor Facebook"), T("Review Ban Book and move completed bans to Completed"),
     T("Answer phone / intercom and document calls"),
@@ -51,7 +51,7 @@ FRONT_CALLS_COMMON = [
 FRONT_MONEY_COMMON = [
     T("Complete a money count at the beginning of the shift"),
     T("Manage canteen: stock items, process purchases, collect payment, and deposit cash"),
-    N("Roll coins as needed"), N("Give any excess money to the supervisor"),
+    N("Roll coins"), N("Give any excess money to the supervisor"),
     T("Complete a money count at the end of the shift"),
 ]
 FRONT_HOUSEKEEPING_DAY = [
@@ -59,15 +59,15 @@ FRONT_HOUSEKEEPING_DAY = [
     T("Disinfect phone, door handles, pens, staplers, and other shared office items"),
     T("Dust / tidy office and remove clutter"), T("Empty garbage in office and Med Room"),
     T("Clean windows in entrance, Med Room, and office"),
-    N("Shovel / salt front steps and walkway as needed"),
+    N("Shovel / salt front steps and walkway"),
 ]
-FRONT_HOUSEKEEPING_NIGHT = FRONT_HOUSEKEEPING_DAY[:5] + [N("Shovel / salt front steps and walkway as needed")]
+FRONT_HOUSEKEEPING_NIGHT = FRONT_HOUSEKEEPING_DAY[:5] + [N("Shovel / salt front steps and walkway")]
 
 FRONT_DESK_MORNING = [
     ("Office", FRONT_OFFICE_COMMON), ("Staff Call-In / Call-Out", FRONT_CALLS_COMMON),
     ("Money Handling / Canteen", FRONT_MONEY_COMMON), ("Housekeeping", FRONT_HOUSEKEEPING_DAY),
     ("Tenant / Site", [
-        T("Greet / buzz in tenants"), T("Sign in visitors and agencies"),
+        T("Sign in visitors and agencies"),
         T("Ensure tenants receive messages and mail"), N("Accept pharmacy medication deliveries"),
         T("Document tenant interactions in WISH"), T("Monitor cameras"),
         T("Complete 12:00 PM wellness check calls"),
@@ -77,14 +77,14 @@ FRONT_DESK_EVENING = [
     ("Office", FRONT_OFFICE_COMMON), ("Staff Call-In / Call-Out", FRONT_CALLS_COMMON),
     ("Money Handling / Canteen", FRONT_MONEY_COMMON), ("Housekeeping", FRONT_HOUSEKEEPING_DAY),
     ("Tenant / Site", [
-        T("Greet / buzz in tenants"), T("Sign out visitors by 06:00 PM"),
+        T("Sign out visitors by 06:00 PM"),
         T("Ensure tenants receive messages and mail"), N("Accept pharmacy medication deliveries"),
         T("Document tenant interactions in WISH"), T("Monitor cameras"),
         T("Complete 08:00 PM wellness check calls"),
     ]),
 ]
 FRONT_DESK_NIGHT = [
-    ("Office", FRONT_OFFICE_COMMON[:10] + [T("Stock canteen"), N("Roll coins as needed"), T("Answer phone / intercom and document calls")]),
+    ("Office", FRONT_OFFICE_COMMON[:10] + [T("Stock canteen"), N("Roll coins"), T("Answer phone / intercom and document calls")]),
     ("Staff Call-In / Call-Out", [
         N("Receive staff sick call-ins, complete the Staff Call-In Form, and update the schedule"),
         N("Do not complete staff call-outs between 11:00 PM and 06:00 AM"),
@@ -99,18 +99,23 @@ SUPPORT_OFFICE = [
     T("Carry cell phone, fanny pack, and walkie-talkie"),
     T("Review IR binder, Communication Book, WISH, Inclusion, schedule, and DNA list"),
     N("Review Heat Hut"), T("Check and reply to emails"),
-    T("Complete leave requests and maintenance requests as needed"),
-    N("Complete Citation training as required"),
+    N("Complete leave requests and maintenance requests"),
+    N("Complete Citation training"),
     T("Organize / tidy Support cupboards and keep work area clean, organized, and dusted"),
     T("Complete shift exchange"), N("Shop for canteen / tenant supplies"),
 ]
 SUPPORT_TENANT = [
-    T("Document tenant interactions in WISH"), N("Complete Incident Reports as needed"),
+    T("Document tenant interactions in WISH"), N("Complete Incident Reports"),
     T("Spend mealtime in the Common Room"), T("Complete programming and fill out programming report"),
     N("Complete 1-on-1 meetings with tenants"), N("Assist tenants with Heat Hut and label items"),
 ]
 LAUNDRY = [T("Clean / tidy first floor laundry room"), T("Clean / tidy second floor laundry room"), T("Clean / tidy third floor laundry room")]
 HALLWAYS = [T("Sweep / mop first floor hallway"), T("Sweep / mop second floor hallway"), T("Sweep / mop third floor hallway")]
+AWAKE_NIGHT_HALLWAYS = HALLWAYS + [
+    T("Wipe first floor window ledges"),
+    T("Wipe second floor window ledges"),
+    T("Wipe third floor window ledges"),
+]
 BATHROOMS = [T("Clean staff bathroom"), T("Clean hallway staff bathroom"), T("Clean accessible tenant washroom")]
 
 SUPPORT_MORNING = [
@@ -118,7 +123,7 @@ SUPPORT_MORNING = [
     ("Common Room", [
         T("Wipe down Common Room tables and TV chairs; stack Common Room chairs"),
         T("Sweep / mop Common Room"), T("Vacuum Common Room carpet"), T("Take out Common Room garbage"),
-        T("Ensure coffee area is tidy and stocked"), N("Water plants as needed"),
+        T("Ensure coffee area is tidy and stocked"), N("Water plants"),
     ]),
     ("Laundry Rooms", LAUNDRY), ("Hallways", HALLWAYS), ("Bathrooms", BATHROOMS),
     ("Safety / Building Checks", [
@@ -131,7 +136,7 @@ SUPPORT_EVENING = [
     ("Common Room", [
         T("Wipe down Common Room tables and TV chairs; stack Common Room chairs"),
         T("Sweep / mop Common Room"), T("Vacuum Common Room carpet"), T("Take out Common Room garbage"),
-        T("Ensure coffee area is tidy"), N("Water plants as needed"),
+        T("Ensure coffee area is tidy"), N("Water plants"),
     ]),
     ("Laundry Rooms", LAUNDRY), ("Hallways", HALLWAYS), ("Bathrooms", BATHROOMS),
     ("Janitor Rooms", [T("Clean / tidy first floor janitor room"), T("Clean / tidy second floor janitor room"), T("Clean / tidy third floor janitor room")]),
@@ -146,15 +151,15 @@ AWAKE_NIGHT = [
     ("Office", [
         T("Carry cell phone, fanny pack, and walkie-talkie"),
         T("Review IR binder, Communication Book, WISH, Inclusion, schedule, and DNA list"),
-        T("Check and reply to emails"), N("Submit leave requests as needed"),
-        N("Complete Citation training as required"), T("Keep work area clean, organized, and dusted"),
-        T("Complete shift exchange"), T("Document tenant interactions in WISH"), N("Complete Incident Reports as needed"),
+        T("Check and reply to emails"), N("Submit leave requests"),
+        N("Complete Citation training"), T("Keep work area clean, organized, and dusted"),
+        T("Complete shift exchange"), T("Document tenant interactions in WISH"), N("Complete Incident Reports"),
     ]),
     ("Tenant Support / Building Checks", [T("Complete hourly floor walks, including corridors, perimeter, and door checks"), T("Offer tenants support")]),
     ("Laundry Rooms", LAUNDRY + [T("Wash, dry, and put away rags, mop heads, and dusters")]),
     ("Maintenance Rooms", [T("Clean / tidy both first floor maintenance rooms"), T("Clean / tidy both second floor maintenance rooms"), T("Clean / tidy both third floor maintenance rooms")]),
     ("Janitor Rooms", [T("Clean, organize, and stock first floor janitor room"), T("Clean, organize, and stock second floor janitor room"), T("Clean, organize, and stock third floor janitor room")]),
-    ("Hallways", HALLWAYS), ("Stairwells", [T("Sweep / mop east stairwell"), T("Sweep / mop west stairwell")]),
+    ("Hallways", AWAKE_NIGHT_HALLWAYS), ("Stairwells", [T("Sweep / mop east stairwell"), T("Sweep / mop west stairwell")]),
     ("Bathrooms", BATHROOMS),
     ("Common Room", [T("Clean blinds and ledges in Common Room"), T("Deep clean TV chairs in Common Room"), T("Deep clean Common Room floors and ledges")]),
     ("Other Cleaning / Closing Tasks", [T("Empty all garbage cans inside and outside"), T("Sweep / mop staff room and 1-on-1 room; disinfect surfaces"), T("Make coffee at 05:00 AM")]),
@@ -163,7 +168,7 @@ AWAKE_NIGHT = [
 LIFE_SKILLS = [
     ("Office / Documentation", [
         T("Complete daily planning"), T("Document tenant interactions in WISH"), T("Check and reply to emails"),
-        N("Complete Citation training as required"), T("Complete required documentation"), N("Update forms as needed"),
+        N("Complete Citation training"), T("Complete required documentation"), N("Update forms"),
         N("Complete tenant case planning"), T("Organize / maintain tenant binders"),
         T("File current tenant bans in appropriate binders"), T("Keep office space tidy and put personal belongings away in locker"),
         T("Save all documents to the computer and log off at the end of the shift"),
@@ -196,5 +201,7 @@ ASSIGNMENTS = [
     ("awake-night", "night", "Awake Night", 60, AWAKE_NIGHT),
     ("life-skills", "morning", "Life Skills Morning", 70, LIFE_SKILLS),
 ]
+
+WEEKDAYS_ONLY_ASSIGNMENT_KEYS = {("life-skills", "morning")}
 
 PROGRAMMING_TASK_LABEL = "Complete programming and fill out programming report"

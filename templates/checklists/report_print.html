@@ -37,7 +37,7 @@
         <tbody>{% for task in row.filtered_tasks %}<tr><td>{{ task.section }}</td><td>{{ task.label }}</td><td>{{ task.state_label }}</td><td>{% if task.contributor %}{{ task.contributor }} · {{ task.changed_at|date:"Y-m-d H:i" }}{% else %}None{% endif %}{% for entry in task.contributions %}{% if entry.activity_text %}<br><strong>Programming:</strong> {{ entry.activity_text }}{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody>
       </table>
     </div>
-    {% if row.discrepancies %}<h3>Discrepancy explanations</h3><ul>{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}:</strong> {{ discrepancy.explanation }}</li>{% endfor %}</ul>{% endif %}
+    {% if row.discrepancies %}<h3>Comments for Incomplete Tasks</h3><ul>{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}:</strong> {{ discrepancy.explanation }}</li>{% endfor %}</ul>{% endif %}
   </section>
 {% empty %}<div class="empty-state">No matching operational Chore Lists.</div>{% endfor %}
 {% endblock %}

@@ -129,6 +129,10 @@ def build_report(*, program, period, filters=None):
             program=program,
             operational_date__range=(period.start, period.end),
         )
+        .exclude(
+            definition__weekdays_only=True,
+            operational_date__week_day__in=(1, 7),
+        )
         .select_related("definition", "category", "shift")
         .order_by("operational_date", "definition__sort_order", "definition_id", "id")
     )

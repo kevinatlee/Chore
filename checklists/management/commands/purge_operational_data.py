@@ -69,7 +69,7 @@ class Command(BaseCommand):
         if fresh_start:
             summary = (
                 f"{instance_count} non-mock checklist(s), {item_count} item(s), "
-                f"{contribution_count} contribution(s), {discrepancy_count} discrepancy explanation(s), "
+                f"{contribution_count} contribution(s), {discrepancy_count} comment(s) for incomplete tasks, "
                 f"{delivery_count} scheduled report "
                 f"delivery record(s); preserving {mock_count} generated mock checklist(s)"
             )
@@ -77,7 +77,7 @@ class Command(BaseCommand):
             summary = (
                 f"cutoff={cutoff.isoformat()}; {instance_count} non-mock checklist(s), "
                 f"{item_count} item(s), {contribution_count} contribution(s), "
-                f"{discrepancy_count} discrepancy explanation(s); preserving "
+                f"{discrepancy_count} comment(s) for incomplete tasks; preserving "
                 f"{mock_count} generated mock checklist(s)"
             )
 

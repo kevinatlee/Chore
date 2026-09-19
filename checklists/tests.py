@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.db import IntegrityError, OperationalError, close_old_connections, models, transaction
 from django.test import Client, SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import (
     AssignmentSectionMembership,
@@ -677,6 +678,8 @@ class AdministrationClarityTests(OperationalFixtureMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Sort order")
         self.assertContains(response, 'name="form-0-sort_order"')
+        self.assertContains(response, "Monday–Friday only")
+        self.assertContains(response, 'name="form-0-weekdays_only"')
 
 
 class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
@@ -690,8 +693,11 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertNotContains(response, "Operational date")
         self.assertContains(response, '<option value="">Select Staff</option>', html=True)
         self.assertContains(response, '<button class="button primary" type="submit">Select Shift</button>', html=True)
-        self.assertContains(response, 'min="2026-09-11"')
-        self.assertContains(response, 'max="2026-09-18"')
+        today = timezone.localdate()
+        self.assertContains(
+            response, f'min="{(today - timedelta(days=7)).isoformat()}"'
+        )
+        self.assertContains(response, f'max="{today.isoformat()}"')
         self.assertContains(response, 'type="date"')
         self.assertContains(response, 'class="date-control"')
         self.assertContains(response, 'class="date-control-display"')
@@ -699,7 +705,9 @@ class SelectorAndRoleTests(OperationalFixtureMixin, TestCase):
         self.assertContains(response, 'id="date"')
         self.assertContains(response, 'name="date"')
         self.assertContains(response, "required")
-        self.assertContains(response, ">Sep 18, 2026</span>")
+        self.assertContains(
+            response, f">{today.strftime('%b')} {today.day}, {today.year}</span>"
+        )
         self.assertContains(response, "date_control.js")
         self.assertContains(response, 'name="staff"')
         self.assertContains(response, "Alfred Sampare")
@@ -1096,13 +1104,93 @@ class SeedCorrectionTests(TestCase):
             for task in tasks
         ]
         self.assertEqual(len(expected_life_labels), 28)
-        for offset in range(7):
+        for offset in range(5):
             instance = resolve_checklist(life_definition, date(2026, 9, 14) + timedelta(days=offset))
             self.assertEqual(
                 list(instance.items.values_list("task_label_snapshot", flat=True)),
                 expected_life_labels,
             )
+        for weekend_date in (date(2026, 9, 19), date(2026, 9, 20)):
+            with self.assertRaises(PermissionDenied):
+                resolve_checklist(life_definition, weekend_date)
+        self.assertTrue(life_definition.weekdays_only)
         self.assertFalse(any(field.name == "weekday" for field in TaskDefinition._meta.fields))
+
+    def test_corrected_seed_content_and_authoritative_counts(self):
+        active_tasks = TaskDefinition.objects.filter(is_active=True)
+        self.assertFalse(active_tasks.filter(label="Greet / buzz in tenants").exists())
+        self.assertEqual(
+            active_tasks.get(label="Complete leave requests and maintenance requests").allow_na,
+            True,
+        )
+        self.assertEqual(
+            active_tasks.get(label="Print and maintain an ample supply of paperwork").allow_na,
+            True,
+        )
+        self.assertFalse(
+            active_tasks.filter(allow_na=True, label__regex=r"(?i)(as needed|as required)").exists()
+        )
+        self.assertTrue(
+            active_tasks.filter(
+                allow_na=False,
+                label="Connect with the Ministry as needed to support tenants",
+            ).exists()
+        )
+
+        awake = ChecklistDefinition.objects.get(seed_key="definition-awake-night-night")
+        support = ChecklistDefinition.objects.get(seed_key="definition-support-morning")
+        awake_hallways = awake.sections.get(name="Hallways")
+        support_hallways = support.sections.get(name="Hallways")
+        expected_hallways = [
+            "Sweep / mop first floor hallway",
+            "Sweep / mop second floor hallway",
+            "Sweep / mop third floor hallway",
+            "Wipe first floor window ledges",
+            "Wipe second floor window ledges",
+            "Wipe third floor window ledges",
+        ]
+        self.assertEqual(
+            list(
+                awake_hallways.task_memberships.order_by("sort_order").values_list(
+                    "task__label", flat=True
+                )
+            ),
+            expected_hallways,
+        )
+        self.assertEqual(
+            list(
+                support_hallways.task_memberships.order_by("sort_order").values_list(
+                    "task__label", flat=True
+                )
+            ),
+            expected_hallways[:3],
+        )
+        self.assertNotEqual(awake_hallways.pk, support_hallways.pk)
+        self.assertEqual(Program.objects.count(), 1)
+        self.assertEqual(StaffCategory.objects.count(), 4)
+        self.assertEqual(Shift.objects.count(), 3)
+        self.assertEqual(ChecklistDefinition.objects.filter(is_active=True).count(), 7)
+        self.assertEqual(ChecklistSection.objects.filter(is_active=True).count(), 33)
+        self.assertEqual(active_tasks.count(), 116)
+        self.assertEqual(
+            SectionTaskMembership.objects.filter(
+                section__is_active=True, task__is_active=True
+            ).count(),
+            172,
+        )
+        self.assertEqual(
+            AssignmentSectionMembership.objects.filter(
+                assignment__is_active=True, section__is_active=True
+            ).count(),
+            43,
+        )
+        expanded = sum(
+            membership.section.task_memberships.filter(task__is_active=True).count()
+            for membership in AssignmentSectionMembership.objects.filter(
+                assignment__is_active=True, section__is_active=True
+            ).select_related("section")
+        )
+        self.assertEqual(expanded, 225)
 
     def test_selector_only_renders_shifts_valid_for_selected_category(self):
         operator = get_user_model().objects.get(username="sonderhouse")
@@ -1162,6 +1250,12 @@ class MockDataTests(TestCase):
         call_command("generate_mock_data", days=7, seed=1234, verbosity=0)
         generated = ChecklistInstance.objects.filter(is_mock_data=True)
         self.assertTrue(generated.exists())
+        self.assertEqual(generated.count(), 47)
+        self.assertFalse(
+            generated.filter(
+                category__slug="life-skills", operational_date__week_day__in=(1, 7)
+            ).exists()
+        )
         self.assertEqual(get_user_model().objects.count(), user_count)
         self.assertFalse(
             generated.exclude(

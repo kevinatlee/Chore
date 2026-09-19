@@ -19,5 +19,5 @@
       </div>
     </section>
   {% endfor %}
-  <section class="contribution-panel"><h2>Discrepancy explanations</h2><ol class="contribution-list">{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}</strong> · {{ discrepancy.updated_at|date:"Y-m-d H:i" }}<p>{{ discrepancy.explanation }}</p></li>{% empty %}<li>No discrepancy explanations submitted.</li>{% endfor %}</ol></section>
+  <section class="contribution-panel"><h2>Comments for Incomplete Tasks</h2><ol class="contribution-list">{% for discrepancy in row.discrepancies %}<li><strong>{{ discrepancy.staff }}</strong> · {{ discrepancy.updated_at|date:"Y-m-d H:i" }}<p>{{ discrepancy.explanation }}</p></li>{% empty %}<li>No comments for incomplete tasks submitted.</li>{% endfor %}</ol></section>
 {% endblock %}

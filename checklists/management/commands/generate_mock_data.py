@@ -16,7 +16,7 @@ from checklists.models import (
     StaffMember,
     TaskState,
 )
-from checklists.services import resolve_checklist
+from checklists.services import definition_available_on_date, resolve_checklist
 
 
 class Command(BaseCommand):
@@ -62,6 +62,8 @@ class Command(BaseCommand):
         for day_offset in range(days):
             operational_date = start + timedelta(days=day_offset)
             for definition_index, definition in enumerate(definitions):
+                if not definition_available_on_date(definition, operational_date):
+                    continue
                 if ChecklistInstance.objects.filter(
                     program=program,
                     operational_date=operational_date,

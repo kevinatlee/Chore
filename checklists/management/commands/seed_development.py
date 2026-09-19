@@ -27,6 +27,7 @@ from checklists.seed_data import (
     PROGRAMMING_TASK_LABEL,
     SHIFTS,
     STAFF_ROSTER,
+    WEEKDAYS_ONLY_ASSIGNMENT_KEYS,
 )
 
 
@@ -100,6 +101,10 @@ class Command(BaseCommand):
                     "category": categories[category_key],
                     "shift": shifts[shift_key],
                     "sort_order": sort_order,
+                    "weekdays_only": (
+                        category_key,
+                        shift_key,
+                    ) in WEEKDAYS_ONLY_ASSIGNMENT_KEYS,
                     "is_active": True,
                 },
             )

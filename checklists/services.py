@@ -75,10 +75,17 @@ def _configuration_is_active(definition):
     )
 
 
+def definition_available_on_date(definition, operational_date):
+    """Return whether a Shift Assignment permits operational use on this date."""
+    return not definition.weekdays_only or operational_date.weekday() < 5
+
+
 def resolve_checklist(definition, operational_date):
     """Return the single shared Chore List, lazily snapshotting it when first opened."""
     if not _configuration_is_active(definition):
         raise PermissionDenied("This Chore List configuration is inactive.")
+    if not definition_available_on_date(definition, operational_date):
+        raise PermissionDenied("This Chore List is not available on this date.")
     lookup = {
         "program": definition.category.program,
         "operational_date": operational_date,
@@ -178,6 +185,9 @@ def change_item_state(
                 validate_operational_entry_date(item.instance.operational_date)
             configuration_is_active = (
                 _configuration_is_active(definition)
+                and definition_available_on_date(
+                    definition, item.instance.operational_date
+                )
                 and item.source_task.is_active
                 and SectionTaskMembership.objects.filter(
                     task=item.source_task,
@@ -260,6 +270,10 @@ def save_discrepancy_explanation(*, instance, actor, staff_member, explanation):
     if actor is None or not actor.is_authenticated or not actor.is_active:
         raise PermissionDenied("An active application account is required.")
     validate_operational_entry_date(instance.operational_date)
+    if not definition_available_on_date(
+        instance.definition, instance.operational_date
+    ):
+        raise PermissionDenied("This Chore List is not available on this date.")
     if not can_operate_program(actor, instance.program_id):
         raise PermissionDenied("Operational-entry access is required for this Program.")
     try:
@@ -270,7 +284,7 @@ def save_discrepancy_explanation(*, instance, actor, staff_member, explanation):
         raise PermissionDenied("The selected staff member is not active in this Program.")
     explanation = (explanation or "").strip()
     if not explanation:
-        raise ValidationError({"explanation": "Enter a discrepancy explanation."})
+        return None
 
     def write():
         with transaction.atomic():

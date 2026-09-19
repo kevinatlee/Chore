@@ -132,7 +132,7 @@ class FreshStartPurgeTests(TestCase):
         self.assertIn("Dry run (fresh start)", output.getvalue())
         self.assertIn(
             "1 non-mock checklist(s), 1 item(s), 1 contribution(s), "
-            "0 discrepancy explanation(s), 1 scheduled report delivery record(s)",
+            "0 comment(s) for incomplete tasks, 1 scheduled report delivery record(s)",
             output.getvalue(),
         )
         self.assertIn("preserving 1 generated mock checklist(s)", output.getvalue())

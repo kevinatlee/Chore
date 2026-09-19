@@ -50,7 +50,8 @@ def build_configuration_export():
             {
                 "id": row.pk, "name": row.name, "position_slug": row.category.slug,
                 "program_slug": row.category.program.slug, "shift": row.shift.name,
-                "sort_order": row.sort_order, "is_active": row.is_active,
+                "sort_order": row.sort_order, "weekdays_only": row.weekdays_only,
+                "is_active": row.is_active,
             }
             for row in ChecklistDefinition.objects.select_related("category__program", "shift").order_by("category__program__slug", "category__sort_order", "shift__sort_order", "pk")
         ],

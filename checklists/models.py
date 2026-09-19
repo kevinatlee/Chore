@@ -153,6 +153,11 @@ class ChecklistDefinition(ActiveOrderedModel):
     shift = models.ForeignKey(
         Shift, on_delete=models.PROTECT, related_name="checklist_definitions"
     )
+    weekdays_only = models.BooleanField(
+        default=False,
+        verbose_name="Monday–Friday only",
+        help_text="Prevent operational use on Saturday and Sunday.",
+    )
     sections = models.ManyToManyField(
         "ChecklistSection",
         through="AssignmentSectionMembership",
@@ -504,8 +509,8 @@ class DiscrepancyExplanation(models.Model):
 
     class Meta:
         ordering = ("created_at", "id")
-        verbose_name = "discrepancy explanation"
-        verbose_name_plural = "discrepancy explanations"
+        verbose_name = "comments for incomplete tasks"
+        verbose_name_plural = "comments for incomplete tasks"
         constraints = [
             models.UniqueConstraint(
                 fields=("instance", "staff"),

@@ -126,29 +126,26 @@ On a brand-new empty appdata directory, it migrates first and the production sch
 creates the first backup immediately afterward. Static assets are collected on every
 start and served by WhiteNoise; Gunicorn serves the application.
 
-## Phase 5 live-test database reset and reseed
+## Production-safe configuration updates
 
-Phase 5 replaces the operational configuration schema and removes weekday-specific Life
-Skills tasks. There is no production history to preserve during the current live test, so
-use a clean database instead of attempting to carry the superseded configuration forward.
-Normal startup never deletes the database.
+Configuration revisions are carried forward by normal Django migrations. Do not reset or
+replace the production database: historical Chore Lists, Task Entries, programming notes,
+Comments for Incomplete Tasks, and report deliveries remain intact. Life Skills uses one
+reusable Morning task list, while the Shift Assignment is available Monday–Friday only;
+weekend Life Skills history remains stored but is excluded from normal reporting.
 
-Run these commands on Unraid from the repository checkout. The `mv` keeps the previous
-live-test database recoverable until Phase 5 has been verified:
+Run the normal update from the repository checkout, then rerun the idempotent seed so the
+active administrative configuration exactly matches the authoritative source:
 
 ```sh
-docker compose -f compose.production.yml down
-mv /mnt/user/appdata/Chore/db.sqlite3 /mnt/user/appdata/Chore/db.sqlite3.pre-phase-5
+docker compose -f compose.production.yml pull
 docker compose -f compose.production.yml up -d
-docker compose -f compose.production.yml exec chore python manage.py seed_development --reset-passwords
-docker compose -f compose.production.yml exec chore python manage.py generate_mock_data --days 365
+docker compose -f compose.production.yml exec chore python manage.py seed_development
 ```
 
-The operational password must already be present as `CHORE_OPERATIONAL_PASSWORD` in
-`.env.production`. Omit the final mock-generation command if the live-test environment
-should start without synthetic reporting history. After confirming login, all seven Shift
-Assignments, report output, and configuration export, retain or remove
-`db.sqlite3.pre-phase-5` according to the site's backup policy.
+Normal startup creates a safe backup and applies migrations without deleting the database.
+Use `--reset-passwords` only when intentionally applying the configured operational password;
+it is not required for configuration reconciliation.
 
 ## Cloudflare Tunnel
 

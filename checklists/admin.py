@@ -122,9 +122,12 @@ class ShiftAdmin(ActiveConfigurationAdminMixin, admin.ModelAdmin):
 
 @admin.register(ChecklistDefinition)
 class ChecklistDefinitionAdmin(ActiveConfigurationAdminMixin, admin.ModelAdmin):
-    list_display = ("name", "category", "shift", "sort_order", "section_count", "availability")
-    list_editable = ("sort_order",)
-    list_filter = ("category__program", "category", "shift", "is_active")
+    list_display = (
+        "name", "category", "shift", "weekdays_only", "sort_order",
+        "section_count", "availability",
+    )
+    list_editable = ("weekdays_only", "sort_order")
+    list_filter = ("category__program", "category", "shift", "weekdays_only", "is_active")
     search_fields = ("name", "category__name", "shift__name")
     inlines = (AssignmentSectionInline,)
 

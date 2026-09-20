@@ -125,6 +125,7 @@ class LoginAndReusableConfigurationTests(Phase5FixtureMixin, TestCase):
             build_report(
                 program=self.program,
                 period=ReportPeriod("daily", self.operational_date, self.operational_date, ""),
+                filters={"category": str(self.position.pk)},
             )["totals"]["applicable"],
             2,
         )
@@ -591,7 +592,8 @@ class WeekdayAvailabilityTests(Phase5FixtureMixin, TestCase):
         self.assertNotIn(invalid_weekend.pk, row_ids)
         self.assertIn(weekday.pk, row_ids)
         self.assertIn(valid_weekend.pk, row_ids)
-        self.assertEqual(report["totals"]["checklists"], 2)
+        self.assertEqual(report["totals"]["checklists"], 12)
+        self.assertEqual(report["totals"]["missing"], 10)
 
 class ConcurrentDiscrepancyTests(Phase5FixtureMixin, TransactionTestCase):
     reset_sequences = True

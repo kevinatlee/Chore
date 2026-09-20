@@ -492,6 +492,27 @@ def report_csv(request):
         ]
     )
     for row in report["rows"]:
+        if row["status"] == "missing":
+            writer.writerow(
+                [
+                    row["operational_date"].isoformat(),
+                    row["category"],
+                    row["shift"],
+                    row["status"],
+                    row["applicable_count"],
+                    0,
+                    0,
+                    row["pending_count"],
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+            )
+            continue
         for task in row["filtered_tasks"]:
             writer.writerow(
                 [

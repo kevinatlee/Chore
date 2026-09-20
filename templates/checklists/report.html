@@ -40,6 +40,7 @@
           <option value="">All</option>
           <option value="completed" {% if filters.status == 'completed' %}selected{% endif %}>Complete</option>
           <option value="incomplete" {% if filters.status == 'incomplete' %}selected{% endif %}>Incomplete</option>
+          <option value="missing" {% if filters.status == 'missing' %}selected{% endif %}>Missing</option>
         </select>
       </label>
       <label>Section
@@ -111,9 +112,9 @@
           <tr>
             <td class="report-date">{{ row.operational_date|date:"Y-m-d" }}</td><td>{{ row.category }}</td><td>{{ row.shift }}</td>
             <td><span class="status status-{{ row.status }}">{{ row.status|title }}</span></td>
-            <td>{{ row.completed_count }}/{{ row.applicable_count }}</td><td>{{ row.completion_percentage }}%</td>
+            {% if row.status == 'missing' %}<td>—</td><td>—</td>{% else %}<td>{{ row.completed_count }}/{{ row.applicable_count }}</td><td>{{ row.completion_percentage }}%</td>{% endif %}
             <td>{% for contributor in row.contributors %}{{ contributor }}{% if not forloop.last %}, {% endif %}{% empty %}None{% endfor %}</td>
-            <td><a href="{% url 'report-detail' row.id %}?{{ query_string }}">Report</a></td>
+            <td>{% if row.id %}<a href="{% url 'report-detail' row.id %}?{{ query_string }}">Report</a>{% else %}—{% endif %}</td>
           </tr>
         {% empty %}<tr><td colspan="8">No operational Chore Lists match this period and filter set.</td></tr>{% endfor %}
       </tbody>

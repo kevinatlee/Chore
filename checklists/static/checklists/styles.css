@@ -98,6 +98,7 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
 .status-completed { color: var(--complete); background: var(--complete-light); }
 .status-na { color: var(--na); background: var(--na-light); }
 .status-incomplete, .status-pending { color: var(--danger); background: #fde8e8; }
+.status-missing { color: #7a4b00; background: #fff1cc; }
 .report-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .filter-actions .button { width: 100%; min-width: 0; padding-inline: .55rem; font-size: .85rem; white-space: nowrap; }

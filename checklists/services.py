@@ -75,10 +75,55 @@ def _configuration_is_active(definition):
     )
 
 
+def definition_available_on_date(definition, operational_date):
+    """Return whether a Shift Assignment permits operational use on this date."""
+    return not definition.weekdays_only or operational_date.weekday() < 5
+
+
+def configured_tasks_for_definition(definition):
+    """Return active configured tasks in snapshot order, deduplicated by task."""
+    memberships = (
+        AssignmentSectionMembership.objects.filter(
+            assignment=definition,
+            section__is_active=True,
+        )
+        .select_related("section")
+        .order_by("sort_order", "id")
+    )
+    configured_tasks = []
+    seen_task_ids = set()
+    for section_membership in memberships:
+        section = section_membership.section
+        task_memberships = (
+            SectionTaskMembership.objects.filter(
+                section=section,
+                task__is_active=True,
+            )
+            .select_related("task")
+            .order_by("sort_order", "id")
+        )
+        for task_membership in task_memberships:
+            task = task_membership.task
+            if task.pk in seen_task_ids:
+                continue
+            seen_task_ids.add(task.pk)
+            configured_tasks.append(
+                {
+                    "task": task,
+                    "section": section,
+                    "section_order": section_membership.sort_order,
+                    "task_order": task_membership.sort_order,
+                }
+            )
+    return configured_tasks
+
+
 def resolve_checklist(definition, operational_date):
     """Return the single shared Chore List, lazily snapshotting it when first opened."""
     if not _configuration_is_active(definition):
         raise PermissionDenied("This Chore List configuration is inactive.")
+    if not definition_available_on_date(definition, operational_date):
+        raise PermissionDenied("This Chore List is not available on this date.")
     lookup = {
         "program": definition.category.program,
         "operational_date": operational_date,
@@ -99,45 +144,23 @@ def resolve_checklist(definition, operational_date):
                 },
             )
             if created:
-                memberships = (
-                    AssignmentSectionMembership.objects.filter(
-                        assignment=definition,
-                        section__is_active=True,
-                    )
-                    .select_related("section")
-                    .order_by("sort_order", "id")
-                )
                 items = []
-                seen_task_ids = set()
-                for section_membership in memberships:
-                    section = section_membership.section
-                    task_memberships = (
-                        SectionTaskMembership.objects.filter(
-                            section=section,
-                            task__is_active=True,
+                for configured_task in configured_tasks_for_definition(definition):
+                    task = configured_task["task"]
+                    items.append(
+                        ChecklistItem(
+                            instance=instance,
+                            source_task=task,
+                            section_name_snapshot=configured_task["section"].name,
+                            section_order_snapshot=configured_task["section_order"],
+                            task_label_snapshot=task.label,
+                            task_order_snapshot=configured_task["task_order"],
+                            allow_na_snapshot=task.allow_na,
+                            requires_completion_note_snapshot=task.requires_completion_note,
+                            scheduled_start_snapshot=task.scheduled_start,
+                            scheduled_end_snapshot=task.scheduled_end,
                         )
-                        .select_related("task")
-                        .order_by("sort_order", "id")
                     )
-                    for task_membership in task_memberships:
-                        task = task_membership.task
-                        if task.pk in seen_task_ids:
-                            continue
-                        seen_task_ids.add(task.pk)
-                        items.append(
-                            ChecklistItem(
-                                instance=instance,
-                                source_task=task,
-                                section_name_snapshot=section.name,
-                                section_order_snapshot=section_membership.sort_order,
-                                task_label_snapshot=task.label,
-                                task_order_snapshot=task_membership.sort_order,
-                                allow_na_snapshot=task.allow_na,
-                                requires_completion_note_snapshot=task.requires_completion_note,
-                                scheduled_start_snapshot=task.scheduled_start,
-                                scheduled_end_snapshot=task.scheduled_end,
-                            )
-                        )
                 ChecklistItem.objects.bulk_create(items)
             return instance
 
@@ -178,6 +201,9 @@ def change_item_state(
                 validate_operational_entry_date(item.instance.operational_date)
             configuration_is_active = (
                 _configuration_is_active(definition)
+                and definition_available_on_date(
+                    definition, item.instance.operational_date
+                )
                 and item.source_task.is_active
                 and SectionTaskMembership.objects.filter(
                     task=item.source_task,
@@ -260,6 +286,10 @@ def save_discrepancy_explanation(*, instance, actor, staff_member, explanation):
     if actor is None or not actor.is_authenticated or not actor.is_active:
         raise PermissionDenied("An active application account is required.")
     validate_operational_entry_date(instance.operational_date)
+    if not definition_available_on_date(
+        instance.definition, instance.operational_date
+    ):
+        raise PermissionDenied("This Chore List is not available on this date.")
     if not can_operate_program(actor, instance.program_id):
         raise PermissionDenied("Operational-entry access is required for this Program.")
     try:
@@ -270,7 +300,7 @@ def save_discrepancy_explanation(*, instance, actor, staff_member, explanation):
         raise PermissionDenied("The selected staff member is not active in this Program.")
     explanation = (explanation or "").strip()
     if not explanation:
-        raise ValidationError({"explanation": "Enter a discrepancy explanation."})
+        return None
 
     def write():
         with transaction.atomic():

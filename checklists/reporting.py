@@ -19,6 +19,7 @@ from .models import (
     StaffMember,
     TaskState,
 )
+from .services import configured_tasks_for_definition, definition_available_on_date
 
 
 @dataclass(frozen=True)
@@ -129,16 +130,32 @@ def build_report(*, program, period, filters=None):
             program=program,
             operational_date__range=(period.start, period.end),
         )
+        .exclude(
+            definition__weekdays_only=True,
+            operational_date__week_day__in=(1, 7),
+        )
         .select_related("definition", "category", "shift")
         .order_by("operational_date", "definition__sort_order", "definition_id", "id")
+    )
+    expected_definitions = (
+        ChecklistDefinition.objects.filter(
+            is_active=True,
+            category__program=program,
+            category__is_active=True,
+            shift__is_active=True,
+        )
+        .select_related("category", "shift")
+        .order_by("sort_order", "id")
     )
 
     category_id = _positive_int(filters.get("category"))
     if category_id:
         if StaffCategory.objects.filter(pk=category_id, program=program).exists():
             instances = instances.filter(category_id=category_id)
+            expected_definitions = expected_definitions.filter(category_id=category_id)
         else:
             instances = instances.none()
+            expected_definitions = expected_definitions.none()
     shift_id = _positive_int(filters.get("shift"))
     if shift_id:
         valid = ChecklistDefinition.objects.filter(
@@ -148,15 +165,24 @@ def build_report(*, program, period, filters=None):
             valid = valid.filter(category_id=category_id)
         if valid.exists():
             instances = instances.filter(shift_id=shift_id)
+            expected_definitions = expected_definitions.filter(shift_id=shift_id)
         else:
             instances = instances.none()
+            expected_definitions = expected_definitions.none()
 
     staff_id = _positive_int(filters.get("staff"))
     state_filter = filters.get("task_state", "")
     section_filter = filters.get("section", "").strip()
     status_filter = filters.get("status", "")
     rows = []
-    totals = {"checklists": 0, "applicable": 0, "completed": 0, "na": 0, "pending": 0}
+    totals = {
+        "checklists": 0,
+        "applicable": 0,
+        "completed": 0,
+        "na": 0,
+        "pending": 0,
+        "missing": 0,
+    }
 
     # Nested prefetch expands every checklist-item id into one IN parameter
     # list. A full-year report exceeds SQLite's variable limit, so use fixed-
@@ -189,7 +215,74 @@ def build_report(*, program, period, filters=None):
             }
         )
 
-    for instance in instances:
+    actual_instances = list(instances)
+    expected_definitions = list(expected_definitions)
+    expected_task_counts = {
+        definition.pk: len(configured_tasks_for_definition(definition))
+        for definition in expected_definitions
+    }
+    actual_by_expected_key = {
+        (instance.operational_date, instance.definition_id): instance
+        for instance in actual_instances
+    }
+    remaining_actual = {instance.pk: instance for instance in actual_instances}
+    row_sources = []
+    operational_date = period.start
+    while operational_date <= period.end:
+        for definition in expected_definitions:
+            if not definition_available_on_date(definition, operational_date):
+                continue
+            instance = actual_by_expected_key.get((operational_date, definition.pk))
+            if instance is not None:
+                remaining_actual.pop(instance.pk, None)
+            row_sources.append((operational_date, definition, instance))
+        operational_date += timedelta(days=1)
+    row_sources.extend(
+        (instance.operational_date, instance.definition, instance)
+        for instance in remaining_actual.values()
+    )
+    row_sources.sort(
+        key=lambda source: (
+            source[0],
+            source[1].sort_order,
+            source[1].pk,
+            source[2].pk if source[2] is not None else 0,
+        )
+    )
+
+    for operational_date, definition, instance in row_sources:
+        if instance is None:
+            if staff_id or state_filter in TaskState.values or section_filter:
+                continue
+            if status_filter in {"completed", "incomplete", "missing"} and status_filter != "missing":
+                continue
+            applicable = expected_task_counts[definition.pk]
+            row = {
+                "id": None,
+                "definition_id": definition.pk,
+                "operational_date": operational_date,
+                "category": definition.category.name,
+                "category_id": definition.category_id,
+                "shift": definition.shift.name,
+                "shift_id": definition.shift_id,
+                "status": "missing",
+                "applicable_count": applicable,
+                "completed_count": 0,
+                "na_count": 0,
+                "pending_count": applicable,
+                "completion_percentage": None,
+                "contributors": [],
+                "discrepancies": [],
+                "tasks": [],
+                "filtered_tasks": [],
+            }
+            rows.append(row)
+            totals["checklists"] += 1
+            totals["applicable"] += applicable
+            totals["pending"] += applicable
+            totals["missing"] += 1
+            continue
+
         tasks = []
         checklist_contributors = {}
         for item in items_by_instance[instance.pk]:
@@ -242,11 +335,12 @@ def build_report(*, program, period, filters=None):
         ]
         if (staff_id or state_filter in TaskState.values or section_filter) and not filtered_tasks:
             continue
-        if status_filter in {"completed", "incomplete"} and status != status_filter:
+        if status_filter in {"completed", "incomplete", "missing"} and status != status_filter:
             continue
 
         row = {
             "id": instance.pk,
+            "definition_id": instance.definition_id,
             "operational_date": instance.operational_date,
             "category": instance.category_name_snapshot,
             "category_id": instance.category_id,

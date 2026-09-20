@@ -28,6 +28,7 @@ from .services import (
     can_view_contributor_audit,
     can_operate_program,
     change_item_state,
+    definition_available_on_date,
     programs_for_operations,
     resolve_checklist,
     save_discrepancy_explanation,
@@ -164,6 +165,12 @@ def dashboard(request):
     ).select_related("category", "shift").order_by(
         "category__sort_order", "shift__sort_order"
     )
+    available_definition_ids = [
+        definition.pk
+        for definition in definitions
+        if definition_available_on_date(definition, operational_date)
+    ]
+    definitions = definitions.filter(pk__in=available_definition_ids)
     categories = []
     seen_categories = set()
     for definition in definitions:
@@ -382,6 +389,9 @@ def update_item_state(request, item_id):
 @login_required
 @require_POST
 def update_discrepancy(request, instance_id):
+    explanation = request.POST.get("explanation", "")
+    if not explanation.strip():
+        return redirect(reverse("dashboard"))
     instance = get_object_or_404(
         ChecklistInstance.objects.select_related("program"), pk=instance_id
     )
@@ -396,15 +406,11 @@ def update_discrepancy(request, instance_id):
             instance=instance,
             actor=request.user,
             staff_member=staff_member,
-            explanation=request.POST.get("explanation", ""),
+            explanation=explanation,
         )
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
-    messages.success(request, "Discrepancy explanation saved for this staff member.")
-    target = reverse("checklist-detail", args=(instance.definition_id,))
-    return redirect(
-        f"{target}?date={instance.operational_date.isoformat()}&staff={staff_member.pk}"
-    )
+    return redirect(reverse("dashboard"))
 
 
 @staff_member_required
@@ -486,6 +492,27 @@ def report_csv(request):
         ]
     )
     for row in report["rows"]:
+        if row["status"] == "missing":
+            writer.writerow(
+                [
+                    row["operational_date"].isoformat(),
+                    row["category"],
+                    row["shift"],
+                    row["status"],
+                    row["applicable_count"],
+                    0,
+                    0,
+                    row["pending_count"],
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+            )
+            continue
         for task in row["filtered_tasks"]:
             writer.writerow(
                 [

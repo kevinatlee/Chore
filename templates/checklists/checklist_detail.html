@@ -101,11 +101,11 @@
   {% endfor %}
 
   <section class="discrepancy-panel">
-    <h2>Discrepancy Explanation</h2>
+    <h2>Comments for Incomplete Tasks</h2>
     <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="discrepancy-form">
       {% csrf_token %}
       <input type="hidden" name="staff" value="{{ staff_member.pk }}">
-      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Discrepancy Explanation" required>{{ discrepancy.explanation }}</textarea>
+      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ discrepancy.explanation }}</textarea>
       <button class="button primary" type="submit">Submit</button>
     </form>
   </section>

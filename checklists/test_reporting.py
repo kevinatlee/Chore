@@ -1,3 +1,5 @@
+import csv
+from copy import deepcopy
 from datetime import date, time, timedelta
 from io import StringIO
 
@@ -27,7 +29,13 @@ from .models import (
     TaskDefinition,
     TaskState,
 )
-from .reporting import ReportPeriod, build_report, period_from_params, scheduled_periods
+from .reporting import (
+    ReportPeriod,
+    build_report,
+    period_from_params,
+    report_snapshot,
+    scheduled_periods,
+)
 from .services import change_item_state, resolve_checklist
 
 
@@ -305,6 +313,254 @@ class ReportCalculationTests(ReportingFixtureMixin, TestCase):
 
         self.assertEqual(report["totals"]["checklists"], 1)
         self.assertEqual(report["totals"]["pending"], 1002)
+
+
+class MissingExpectedReportTests(TestCase):
+    weekday = date(2026, 9, 18)
+    saturday = date(2026, 9, 19)
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command("seed_development", verbosity=0)
+        cls.program = Program.objects.get(slug="sonder-house")
+        cls.manager = get_user_model().objects.create_user(
+            "missing-report-manager",
+            email="missing-report-manager@example.com",
+            password="password",
+        )
+        ProgramMembership.objects.create(
+            user=cls.manager,
+            program=cls.program,
+            role=ProgramRole.MANAGER,
+            receive_scheduled_reports=True,
+        )
+        cls.staff = StaffMember.objects.filter(program=cls.program).first()
+
+    def report(self, operational_date, **filters):
+        return build_report(
+            program=self.program,
+            period=ReportPeriod(
+                "daily", operational_date, operational_date, "fixture", operational_date
+            ),
+            filters=filters,
+        )
+
+    def definition(self, seed_key):
+        return ChecklistDefinition.objects.get(seed_key=seed_key)
+
+    def complete(self, instance):
+        for item in instance.items.all():
+            change_item_state(
+                item_id=item.pk,
+                actor=None,
+                staff_member=self.staff,
+                new_state=TaskState.COMPLETED,
+                system=True,
+            )
+
+    def test_weekday_and_saturday_zero_instance_expectations(self):
+        weekday_report = self.report(self.weekday)
+        self.assertEqual(
+            [(row["category"], row["shift"]) for row in weekday_report["rows"]],
+            [
+                ("Front Desk", "Morning"),
+                ("Front Desk", "Evening"),
+                ("Front Desk", "Night"),
+                ("Support", "Morning"),
+                ("Support", "Evening"),
+                ("Awake Night", "Night"),
+                ("Life Skills", "Morning"),
+            ],
+        )
+        self.assertEqual(
+            [row["status"] for row in weekday_report["rows"]],
+            ["missing"] * 7,
+        )
+        self.assertEqual(weekday_report["totals"]["checklists"], 7)
+        self.assertEqual(weekday_report["totals"]["missing"], 7)
+        self.assertEqual(weekday_report["totals"]["applicable"], 222)
+        self.assertEqual(weekday_report["totals"]["completion_percentage"], 0.0)
+
+        saturday_report = self.report(self.saturday)
+        self.assertEqual(len(saturday_report["rows"]), 6)
+        self.assertTrue(all(row["status"] == "missing" for row in saturday_report["rows"]))
+        self.assertNotIn(
+            ("Life Skills", "Morning"),
+            [(row["category"], row["shift"]) for row in saturday_report["rows"]],
+        )
+        self.assertEqual(saturday_report["totals"]["missing"], 6)
+        self.assertEqual(ChecklistInstance.objects.count(), 0)
+
+    def test_actual_rows_replace_expected_slots_and_missing_work_affects_totals(self):
+        saturday_front = resolve_checklist(
+            self.definition("definition-front-desk-morning"), self.saturday
+        )
+        self.complete(saturday_front)
+        saturday_report = self.report(self.saturday)
+        self.assertEqual(saturday_report["totals"]["missing"], 5)
+        self.assertLess(saturday_report["totals"]["completion_percentage"], 100.0)
+
+        front = resolve_checklist(
+            self.definition("definition-front-desk-morning"), self.weekday
+        )
+        awake = resolve_checklist(
+            self.definition("definition-awake-night-night"), self.weekday
+        )
+        self.complete(front)
+
+        report = self.report(self.weekday)
+        rows = {(row["category"], row["shift"]): row for row in report["rows"]}
+        self.assertEqual(len(rows), 7)
+        self.assertEqual(rows[("Front Desk", "Morning")]["status"], "completed")
+        self.assertEqual(rows[("Awake Night", "Night")]["status"], "incomplete")
+        self.assertEqual(report["totals"]["missing"], 5)
+        self.assertLess(report["totals"]["completion_percentage"], 100.0)
+
+        support = resolve_checklist(
+            self.definition("definition-support-morning"), self.weekday
+        )
+        refreshed = self.report(self.weekday)
+        support_rows = [
+            row
+            for row in refreshed["rows"]
+            if (row["category"], row["shift"]) == ("Support", "Morning")
+        ]
+        self.assertEqual(len(support_rows), 1)
+        self.assertEqual(support_rows[0]["id"], support.pk)
+        self.assertEqual(support_rows[0]["status"], "incomplete")
+        self.assertEqual(refreshed["totals"]["missing"], 4)
+        self.assertEqual(ChecklistInstance.objects.count(), 4)
+        self.assertEqual(awake.pk, rows[("Awake Night", "Night")]["id"])
+
+    def test_completion_position_shift_staff_section_and_task_filters(self):
+        front = resolve_checklist(
+            self.definition("definition-front-desk-morning"), self.weekday
+        )
+        support = resolve_checklist(
+            self.definition("definition-support-morning"), self.weekday
+        )
+        self.complete(front)
+        support_item = support.items.first()
+        change_item_state(
+            item_id=support_item.pk,
+            actor=None,
+            staff_member=self.staff,
+            new_state=TaskState.COMPLETED,
+            system=True,
+        )
+
+        self.assertEqual(len(self.report(self.weekday)["rows"]), 7)
+        self.assertEqual(len(self.report(self.weekday, status="completed")["rows"]), 1)
+        self.assertEqual(len(self.report(self.weekday, status="incomplete")["rows"]), 1)
+        missing_report = self.report(self.weekday, status="missing")
+        self.assertEqual(len(missing_report["rows"]), 5)
+        self.assertEqual(missing_report["totals"]["checklists"], 5)
+
+        front_rows = self.report(
+            self.weekday, category=str(front.category_id)
+        )["rows"]
+        self.assertEqual(len(front_rows), 3)
+        self.assertEqual(
+            [row["status"] for row in front_rows],
+            ["completed", "missing", "missing"],
+        )
+        morning_rows = self.report(
+            self.weekday, shift=str(front.shift_id)
+        )["rows"]
+        self.assertEqual(len(morning_rows), 3)
+        self.assertEqual(
+            [(row["category"], row["status"]) for row in morning_rows],
+            [
+                ("Front Desk", "completed"),
+                ("Support", "incomplete"),
+                ("Life Skills", "missing"),
+            ],
+        )
+
+        staff_rows = self.report(self.weekday, staff=str(self.staff.pk))["rows"]
+        self.assertEqual(
+            {(row["category"], row["shift"]) for row in staff_rows},
+            {("Front Desk", "Morning"), ("Support", "Morning")},
+        )
+        section_rows = self.report(
+            self.weekday, section=support_item.section_name_snapshot
+        )["rows"]
+        self.assertTrue(section_rows)
+        self.assertNotIn("missing", {row["status"] for row in section_rows})
+        state_rows = self.report(
+            self.weekday, task_state=TaskState.COMPLETED
+        )["rows"]
+        self.assertTrue(state_rows)
+        self.assertNotIn("missing", {row["status"] for row in state_rows})
+
+    def test_web_print_and_csv_render_missing_without_fake_details(self):
+        self.client.force_login(self.manager)
+        params = {"date": self.weekday.isoformat()}
+        response = self.client.get(reverse("reports"), params)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<option value="missing"')
+        self.assertContains(response, 'class="status status-missing"', count=7)
+        self.assertContains(response, ">Missing</span>", count=7)
+        self.assertContains(response, ">—</td>")
+        self.assertContains(response, ">None</td>", count=7)
+        self.assertNotContains(response, ">Report</a>")
+
+        printable = self.client.get(reverse("report-print"), params)
+        self.assertEqual(printable.status_code, 200)
+        self.assertContains(
+            printable,
+            "No Chore List was created for this expected Shift Assignment.",
+            count=7,
+        )
+        self.assertNotContains(printable, '<table class="report-table">')
+
+        csv_response = self.client.get(reverse("report-csv"), params)
+        records = list(csv.reader(StringIO(csv_response.content.decode())))
+        self.assertEqual(len(records), 8)
+        for record in records[1:]:
+            self.assertEqual(record[3], "missing")
+            self.assertGreater(int(record[4]), 0)
+            self.assertEqual(record[8], "")
+            self.assertEqual(record[10:], ["", "", "", "", ""])
+
+    def test_report_snapshot_keeps_missing_rows(self):
+        snapshot = report_snapshot(self.report(self.weekday))
+        self.assertEqual(len(snapshot["checklists"]), 7)
+        self.assertTrue(
+            all(row["status"] == "missing" for row in snapshot["checklists"])
+        )
+        self.assertTrue(all(row["id"] is None for row in snapshot["checklists"]))
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        EMAIL_ENABLED=True,
+    )
+    def test_scheduled_weekend_missing_snapshot_is_immutable_after_late_creation(self):
+        call_command("send_scheduled_reports", at="2026-09-20T08:00:00", verbosity=0)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].body.count("Missing"), 6)
+        self.assertIn(self.saturday.isoformat(), mail.outbox[0].body)
+        self.assertNotIn("Life Skills", mail.outbox[0].body)
+
+        delivery = ScheduledReportDelivery.objects.get(
+            program=self.program,
+            cadence=ReportCadence.DAILY,
+            period_start=self.saturday,
+            period_end=self.saturday,
+        )
+        original_snapshot = deepcopy(delivery.snapshot)
+        self.assertEqual(len(original_snapshot["checklists"]), 6)
+        self.assertTrue(
+            all(row["status"] == "missing" for row in original_snapshot["checklists"])
+        )
+
+        resolve_checklist(
+            self.definition("definition-front-desk-morning"), self.saturday
+        )
+        self.assertEqual(self.report(self.saturday)["totals"]["missing"], 5)
+        call_command("send_scheduled_reports", at="2026-09-20T09:00:00", verbosity=0)
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.snapshot, original_snapshot)
 
 
 class PeriodBoundaryTests(TestCase):

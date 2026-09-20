@@ -1,6 +1,6 @@
 # Chore
 
-Chore is a shared operational checklist application for Sonder House. It separates authenticated application accounts from the operational staff roster, provides lazily created shared checklists, records per-task Pending/Completed/N/A state and Task Entry history, and supplies Program-scoped operational reporting. Phase 5 incorporates live-test findings: reusable ordered configuration, staff-facing contributor privacy, discrepancy explanations, programming activity notes, simplified Life Skills scheduling, revised reports, and a portable configuration export.
+Chore is a shared operational checklist application for Sonder House. It separates authenticated application accounts from the operational staff roster, provides lazily created shared checklists, records per-task Pending/Completed/N/A state and Task Entry history, and supplies Program-scoped operational reporting. Phase 5 incorporates live-test findings: reusable ordered configuration, staff-facing contributor privacy, Comments for Incomplete Tasks, programming activity notes, simplified Life Skills scheduling, revised reports, and a portable configuration export.
 
 The important identity rule is enforced in the database: one operational checklist exists for each Program, date, position, and shift. Selecting another staff name changes attribution, never checklist identity.
 
@@ -45,7 +45,7 @@ The development seed is repeatable. Seed-managed staff, shifts, definitions, sec
 - Awake Night: Night
 - Life Skills: Morning
 
-Morning, Evening, and Night retain 07:00–15:00, 15:00–23:00, and 23:00–07:00 as secondary boundary metadata. Life Skills uses one Morning assignment with the same 28-task list every day; weekday-specific task selection no longer exists. The Phase 5 seed contains 114 reusable Task records and 224 ordered task placements across the seven assignments. Tasks marked conditional by the authoritative configuration selectively allow N/A.
+Morning, Evening, and Night retain 07:00–15:00, 15:00–23:00, and 23:00–07:00 as secondary boundary metadata. Life Skills uses one reusable Morning assignment with one task list that does not vary by weekday. The Shift Assignment is available Monday–Friday only; Saturday and Sunday Life Skills records are excluded from normal reporting statistics. The authoritative seed contains 115 reusable Task records and 222 expanded assignment task placements across the seven assignments. Tasks marked conditional by the authoritative configuration selectively allow N/A.
 
 For a shift that crosses midnight, the operational date is the date on which the shift starts. For example, staff working the 23:00–07:00 shift after midnight select the previous calendar date.
 
@@ -55,7 +55,7 @@ Authentication answers who may enter Chore. `ProgramMembership` grants either op
 
 The first request for a valid date/category/shift lazily creates a `ChecklistInstance`. Its database uniqueness constraint prevents duplicates. SQLite atomic writes begin in `IMMEDIATE` mode and retry transient lock errors within a small bound, so concurrent creation and state changes serialize safely. Tasks belong to Sections and Sections belong to Shift Assignments through explicit ordered memberships. Generation walks those memberships in order, snapshots each unique Task at most once, and uses the first configured applicable Section when multiple paths reach the same Task. `ChecklistItem` rows snapshot the category, shift, section, task label, ordering, N/A permission, and optional schedule times. Later configuration edits therefore do not rewrite historical operational meaning.
 
-Every meaningful item state change updates the current state and appends a Task Entry in one transaction. Entries reference the selected operational `StaffMember`; the authenticated account is retained separately as optional audit metadata. The programming task requires an activity description, and its completion plus description are committed atomically. Discrepancy explanations are stored independently per Chore List and Staff member, so one contributor cannot overwrite another contributor's explanation. Ordinary operational users see completion state but receive no contributor names or timestamps in form HTML or synchronization JSON; Manager/Admin reports retain the audit details.
+Every meaningful item state change updates the current state and appends a Task Entry in one transaction. Entries reference the selected operational `StaffMember`; the authenticated account is retained separately as optional audit metadata. The programming task requires an activity description, and its completion plus description are committed atomically. Comments for Incomplete Tasks are stored independently per Chore List and Staff member, so one contributor cannot overwrite another contributor's comment. Submitting a blank comment leaves any stored comment unchanged and returns to Chore List selection. Ordinary operational users see completion state but receive no contributor names or timestamps in form HTML or synchronization JSON; Manager/Admin reports retain the audit details.
 
 ## Administration
 
@@ -83,32 +83,31 @@ python -m compileall chore checklists
 git diff --check main..HEAD
 ```
 
-## Phase 5 live-test reset
+## Configuration updates
 
-Phase 5 intentionally replaces the old task/section and weekday Life Skills schema. Because the deployment is still live testing, the supported clean transition is to stop the app, archive and remove the live-test SQLite file, start the app so migrations build a fresh database, then seed the Phase 5 configuration and optionally regenerate mock history. Exact Unraid commands are documented in `docs/DEPLOYMENT.md`. For a disposable local database, remove `db.sqlite3`, then run:
+Current configuration corrections are applied by normal, production-safe migrations. Do not delete or reset the database: existing Chore Lists, Task Entries, programming notes, comments, and sent-report history remain intact. Container startup applies migrations automatically and preserves persistent appdata. A normal production or ChoreTest update does not require `seed_development`; reserve it for a new empty installation or intentional administrative reconciliation.
 
 ```powershell
 python manage.py migrate
-$env:CHORE_OPERATIONAL_PASSWORD = "choose-the-live-test-password"
-python manage.py seed_development --reset-passwords
-python manage.py generate_mock_data --days 365
 ```
 
 No database is deleted by normal application startup.
 
 ## Production deployment
 
-Phase 4 provides production and test Docker Compose deployments, GHCR `:latest` and
-`:test` image publishing, runtime FQDN/proxy security configuration, global test-email
-suppression, a database-aware healthcheck, and SQLite-safe daily backups. See
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for initial Unraid setup, Cloudflare Tunnel and
-Gmail configuration, ChoreTest refresh behavior, updates, restores, and rollback.
+Production and ChoreTest are Unraid template-managed containers using
+`ghcr.io/kevinatlee/chore:latest` and `ghcr.io/kevinatlee/chore:test`. GitHub Actions
+publishes the images, and the operator deploys a successful build with **Force Update** in
+Unraid. Container startup applies migrations automatically; ChoreTest also refreshes from
+the configured production backup mount. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for
+Cloudflare Tunnel and Gmail configuration, startup behavior, updates, restores, and
+rollback.
 
 ## Reporting and operations
 
 Phase 2 adds Program-scoped Manager reporting without changing shared-checklist ownership. Configure Manager `ProgramMembership` records in Django admin; a Manager can report only on authorized Programs and receives scheduled email only when **Receive scheduled reports** is enabled. Report Staff filters and attribution use operational `StaffMember` records.
 
-The report UI is available at `/reports/` and uses one Date control for daily, Monday–Sunday weekly, containing-month, containing-calendar-year, and rolling-365-day periods. It includes Position, valid Shift, Staff, Completion, and Section filtering, plus CSV and print/browser-PDF output. Task wording is normalized at display time, preserving stored configuration and historical snapshots. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
+The report UI is available at `/reports/` and uses one Date control for daily, Monday–Sunday weekly, containing-month, containing-calendar-year, and rolling-365-day periods. It includes Position, valid Shift, Staff, Completion, and Section filtering, plus CSV and print/browser-PDF output. Reports include every currently expected Shift Assignment for each operational date and mark an absent Chore List as Missing without creating operational history; weekdays-only availability still applies. Missing expected work is included in aggregate completion, while existing Chore Lists continue to report from their stored snapshots. Task wording is normalized at display time, preserving stored configuration and historical snapshots. Web reports are live; sent email delivery rows preserve their generated HTML and JSON snapshot.
 
 Generate deterministic synthetic operational history for reporting and testing with the normal operational roster:
 
@@ -150,4 +149,4 @@ python manage.py purge_operational_data --fresh-start
 
 Fresh-start mode removes all non-mock Chore List instances, their item snapshots and Staff Contributions, plus scheduled report delivery history. Generated mock Chore Lists, items, and Staff Contributions remain available for reporting; `python manage.py generate_mock_data --clear` is the explicit way to remove them. Programs, active/inactive configuration, authentication users, Program memberships, and the operational staff roster are also preserved. The purge contains no named or special-case staff cleanup logic.
 
-Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. Phase 5 adds reusable ordered configuration, contributor privacy and discrepancy explanations, revised web/print/email reporting, and configuration-only export. The application intentionally uses short polling rather than websocket or message-bus infrastructure and does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, or infrastructure queues.
+Normal retention also leaves generated mock history untouched and does not remove configuration, inactive identities, or sent report snapshots. Phase 5 adds reusable ordered configuration, contributor privacy and Comments for Incomplete Tasks, revised web/print/email reporting, and configuration-only export. The application intentionally uses short polling rather than websocket or message-bus infrastructure and does not add advanced analytics, staff scoring, a live Manager dashboard, server-side PDF rendering, or infrastructure queues.

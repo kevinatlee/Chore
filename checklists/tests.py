@@ -1,3 +1,4 @@
+import importlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time, timedelta
@@ -6,6 +7,7 @@ from pathlib import Path
 from threading import Barrier
 from unittest.mock import call, patch
 
+from django.apps import apps as django_apps
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.forms import AdminPasswordChangeForm
 from django.contrib.auth.password_validation import validate_password
@@ -1136,6 +1138,14 @@ class SeedCorrectionTests(TestCase):
                 label="Connect with the Ministry as needed to support tenants",
             ).exists()
         )
+        self.assertFalse(active_tasks.filter(label="Print needed forms").exists())
+        self.assertFalse(
+            SectionTaskMembership.objects.filter(
+                task__label="Print needed forms",
+                section__is_active=True,
+                section__assignment_memberships__assignment__is_active=True,
+            ).exists()
+        )
 
         awake = ChecklistDefinition.objects.get(seed_key="definition-awake-night-night")
         support = ChecklistDefinition.objects.get(seed_key="definition-support-morning")
@@ -1171,12 +1181,12 @@ class SeedCorrectionTests(TestCase):
         self.assertEqual(Shift.objects.count(), 3)
         self.assertEqual(ChecklistDefinition.objects.filter(is_active=True).count(), 7)
         self.assertEqual(ChecklistSection.objects.filter(is_active=True).count(), 33)
-        self.assertEqual(active_tasks.count(), 116)
+        self.assertEqual(active_tasks.count(), 115)
         self.assertEqual(
             SectionTaskMembership.objects.filter(
                 section__is_active=True, task__is_active=True
             ).count(),
-            172,
+            170,
         )
         self.assertEqual(
             AssignmentSectionMembership.objects.filter(
@@ -1190,7 +1200,121 @@ class SeedCorrectionTests(TestCase):
                 assignment__is_active=True, section__is_active=True
             ).select_related("section")
         )
-        self.assertEqual(expanded, 225)
+        self.assertEqual(expanded, 222)
+
+    def test_migration_removes_print_forms_without_replacing_history_or_seed_records(self):
+        migration = importlib.import_module(
+            "checklists.migrations.0009_weekday_availability_and_operational_corrections"
+        )
+        print_task = TaskDefinition.objects.create(
+            seed_key=migration.stable_key("task", "Print needed forms"),
+            label="Print needed forms",
+            allow_na=True,
+        )
+        front_office_sections = ChecklistSection.objects.filter(
+            name="Office",
+            assignment_memberships__assignment__seed_key__in=(
+                "definition-front-desk-morning",
+                "definition-front-desk-evening",
+                "definition-front-desk-night",
+            ),
+        ).distinct()
+        self.assertEqual(front_office_sections.count(), 2)
+
+        for section in front_office_sections:
+            for membership in section.task_memberships.filter(
+                sort_order__gte=70
+            ).order_by("-sort_order", "-id"):
+                membership.sort_order += 10
+                membership.save(update_fields=("sort_order",))
+            SectionTaskMembership.objects.create(
+                section=section,
+                task=print_task,
+                sort_order=70,
+            )
+            specs = list(
+                section.task_memberships.select_related("task")
+                .order_by("sort_order", "id")
+                .values_list("task__label", "task__allow_na")
+            )
+            section.seed_key = migration.section_key(section.name, specs)
+            section.save(update_fields=("seed_key",))
+
+        definition = ChecklistDefinition.objects.get(
+            seed_key="definition-front-desk-morning"
+        )
+        operator = get_user_model().objects.get(username="sonderhouse")
+        staff = StaffMember.objects.first()
+        instance = resolve_checklist(definition, date(2026, 9, 18))
+        historical_item = instance.items.get(source_task=print_task)
+        change_item_state(
+            item_id=historical_item.pk,
+            actor=operator,
+            staff_member=staff,
+            new_state=TaskState.COMPLETED,
+        )
+
+        migration.apply_corrections(django_apps, None)
+
+        print_task.refresh_from_db()
+        historical_item.refresh_from_db()
+        self.assertFalse(print_task.is_active)
+        self.assertFalse(
+            print_task.section_memberships.filter(
+                section__is_active=True,
+                section__assignment_memberships__assignment__is_active=True,
+            ).exists()
+        )
+        self.assertEqual(historical_item.task_label_snapshot, "Print needed forms")
+        self.assertEqual(historical_item.current_state, TaskState.COMPLETED)
+        self.assertEqual(historical_item.contributions.get().staff, staff)
+
+        for section in ChecklistSection.objects.filter(
+            seed_key__startswith="phase5-section-", is_active=True
+        ):
+            specs = list(
+                section.task_memberships.select_related("task")
+                .order_by("sort_order", "id")
+                .values_list("task__label", "task__allow_na")
+            )
+            self.assertEqual(
+                section.seed_key,
+                migration.section_key(section.name, specs),
+            )
+
+        active_section_ids = set(
+            ChecklistSection.objects.filter(is_active=True).values_list("pk", flat=True)
+        )
+        active_task_ids = set(
+            TaskDefinition.objects.filter(is_active=True).values_list("pk", flat=True)
+        )
+        call_command("seed_development", reset_passwords=True, verbosity=0)
+        call_command("seed_development", reset_passwords=True, verbosity=0)
+        self.assertEqual(
+            active_section_ids,
+            set(
+                ChecklistSection.objects.filter(is_active=True).values_list(
+                    "pk", flat=True
+                )
+            ),
+        )
+        self.assertEqual(
+            active_task_ids,
+            set(
+                TaskDefinition.objects.filter(is_active=True).values_list(
+                    "pk", flat=True
+                )
+            ),
+        )
+        self.assertEqual(
+            TaskDefinition.objects.filter(seed_key=print_task.seed_key).count(),
+            1,
+        )
+        print_task.refresh_from_db()
+        historical_item.refresh_from_db()
+        self.assertFalse(print_task.is_active)
+        self.assertEqual(historical_item.task_label_snapshot, "Print needed forms")
+        self.assertTrue(historical_item.contributions.exists())
 
     def test_selector_only_renders_shifts_valid_for_selected_category(self):
         operator = get_user_model().objects.get(username="sonderhouse")

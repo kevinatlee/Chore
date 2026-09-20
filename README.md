@@ -45,7 +45,7 @@ The development seed is repeatable. Seed-managed staff, shifts, definitions, sec
 - Awake Night: Night
 - Life Skills: Morning
 
-Morning, Evening, and Night retain 07:00–15:00, 15:00–23:00, and 23:00–07:00 as secondary boundary metadata. Life Skills uses one reusable Morning assignment with one task list that does not vary by weekday. The Shift Assignment is available Monday–Friday only; Saturday and Sunday Life Skills records are excluded from normal reporting statistics. The authoritative seed contains 116 reusable Task records and 225 expanded assignment task placements across the seven assignments. Tasks marked conditional by the authoritative configuration selectively allow N/A.
+Morning, Evening, and Night retain 07:00–15:00, 15:00–23:00, and 23:00–07:00 as secondary boundary metadata. Life Skills uses one reusable Morning assignment with one task list that does not vary by weekday. The Shift Assignment is available Monday–Friday only; Saturday and Sunday Life Skills records are excluded from normal reporting statistics. The authoritative seed contains 115 reusable Task records and 222 expanded assignment task placements across the seven assignments. Tasks marked conditional by the authoritative configuration selectively allow N/A.
 
 For a shift that crosses midnight, the operational date is the date on which the shift starts. For example, staff working the 23:00–07:00 shift after midnight select the previous calendar date.
 

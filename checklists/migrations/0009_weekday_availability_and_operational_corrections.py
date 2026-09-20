@@ -33,6 +33,8 @@ HALLWAY_TASKS = [
     "Wipe third floor window ledges",
 ]
 
+REMOVED_ACTIVE_TASK_LABELS = ("Print needed forms",)
+
 
 def stable_key(prefix, value):
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
@@ -90,6 +92,26 @@ def apply_corrections(apps, schema_editor):
         if not still_active:
             greet_task.is_active = False
             greet_task.save(update_fields=("is_active",))
+
+    for label in REMOVED_ACTIVE_TASK_LABELS:
+        task = TaskDefinition.objects.filter(
+            seed_key=stable_key("task", label)
+        ).first()
+        if task is None:
+            continue
+        SectionTaskMembership.objects.filter(
+            task=task,
+            section__is_active=True,
+            section__assignment_memberships__assignment__is_active=True,
+        ).delete()
+        still_active = SectionTaskMembership.objects.filter(
+            task=task,
+            section__is_active=True,
+            section__assignment_memberships__assignment__is_active=True,
+        ).exists()
+        if not still_active:
+            task.is_active = False
+            task.save(update_fields=("is_active",))
 
     # Section keys include ordered task labels and N/A eligibility. Rewrite the
     # existing seed-managed records in place so the next seed run reuses them.

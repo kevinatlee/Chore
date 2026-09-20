@@ -39,7 +39,7 @@ FRONT_OFFICE_COMMON = [
     N("Complete leave requests and maintenance requests"),
     N("Complete Citation training"),
     N("Print and maintain an ample supply of paperwork"),
-    N("Print needed forms"), T("Ensure printer is stocked with paper"),
+    T("Ensure printer is stocked with paper"),
     T("Monitor Facebook"), T("Review Ban Book and move completed bans to Completed"),
     T("Answer phone / intercom and document calls"),
 ]
@@ -84,7 +84,7 @@ FRONT_DESK_EVENING = [
     ]),
 ]
 FRONT_DESK_NIGHT = [
-    ("Office", FRONT_OFFICE_COMMON[:10] + [T("Stock canteen"), N("Roll coins"), T("Answer phone / intercom and document calls")]),
+    ("Office", FRONT_OFFICE_COMMON[:-1] + [T("Stock canteen"), N("Roll coins"), T("Answer phone / intercom and document calls")]),
     ("Staff Call-In / Call-Out", [
         N("Receive staff sick call-ins, complete the Staff Call-In Form, and update the schedule"),
         N("Do not complete staff call-outs between 11:00 PM and 06:00 AM"),

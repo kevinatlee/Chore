@@ -2,6 +2,7 @@ import csv
 from copy import deepcopy
 from datetime import date, time, timedelta
 from io import StringIO
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core import mail
@@ -43,6 +44,12 @@ class ReportingFixtureMixin:
     operational_date = date(2026, 9, 15)
 
     def setUp(self):
+        self.localdate = patch(
+            "checklists.operational_dates.timezone.localdate",
+            return_value=date(2026, 9, 20),
+        )
+        self.localdate.start()
+        self.addCleanup(self.localdate.stop)
         User = get_user_model()
         self.program_a = Program.objects.create(name="Program Alpha", slug="alpha")
         self.program_b = Program.objects.create(name="Program Beta", slug="beta")
@@ -334,7 +341,8 @@ class MissingExpectedReportTests(TestCase):
             role=ProgramRole.MANAGER,
             receive_scheduled_reports=True,
         )
-        cls.staff = StaffMember.objects.filter(program=cls.program).first()
+        cls.staff_members = list(StaffMember.objects.filter(program=cls.program)[:3])
+        cls.staff = cls.staff_members[0]
 
     def report(self, operational_date, **filters):
         return build_report(
@@ -350,13 +358,14 @@ class MissingExpectedReportTests(TestCase):
 
     def complete(self, instance):
         for item in instance.items.all():
-            change_item_state(
-                item_id=item.pk,
-                actor=None,
-                staff_member=self.staff,
-                new_state=TaskState.COMPLETED,
-                system=True,
-            )
+            for staff in self.staff_members[: item.required_staff_completions_snapshot]:
+                change_item_state(
+                    item_id=item.pk,
+                    actor=None,
+                    staff_member=staff,
+                    new_state=TaskState.COMPLETED,
+                    system=True,
+                )
 
     def test_weekday_and_saturday_zero_instance_expectations(self):
         weekday_report = self.report(self.weekday)
@@ -521,7 +530,7 @@ class MissingExpectedReportTests(TestCase):
             self.assertEqual(record[3], "missing")
             self.assertGreater(int(record[4]), 0)
             self.assertEqual(record[8], "")
-            self.assertEqual(record[10:], ["", "", "", "", ""])
+            self.assertEqual(record[10:], ["", "", "", "", "", "", "", ""])
 
     def test_report_snapshot_keeps_missing_rows(self):
         snapshot = report_snapshot(self.report(self.weekday))

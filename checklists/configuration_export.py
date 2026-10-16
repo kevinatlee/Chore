@@ -63,6 +63,7 @@ def build_configuration_export():
             {
                 "id": row.pk, "label": row.label, "allow_na": row.allow_na,
                 "requires_completion_note": row.requires_completion_note,
+                "required_staff_completions": row.required_staff_completions,
                 "is_active": row.is_active,
                 "scheduled_start": row.scheduled_start.isoformat() if row.scheduled_start else None,
                 "scheduled_end": row.scheduled_end.isoformat() if row.scheduled_end else None,

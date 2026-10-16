@@ -8,6 +8,7 @@ db.sqlite3
 .coverage
 htmlcov/
 .pytest_cache/
+.tmp/
 backups/
 staticfiles/
 .DS_Store

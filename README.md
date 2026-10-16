@@ -98,8 +98,9 @@ No database is deleted by normal application startup.
 Production and ChoreTest are Unraid template-managed containers using
 `ghcr.io/kevinatlee/chore:latest` and `ghcr.io/kevinatlee/chore:test`. GitHub Actions
 publishes the images, and the operator deploys a successful build with **Force Update** in
-Unraid. Container startup applies migrations automatically; ChoreTest also refreshes from
-the configured production backup mount. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for
+Unraid. Container startup applies migrations automatically. ChoreTest keeps its persistent
+test database across ordinary restarts; production snapshots are installed only through
+the explicit stopped-container refresh procedure. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for
 Cloudflare Tunnel and Gmail configuration, startup behavior, updates, restores, and
 rollback.
 

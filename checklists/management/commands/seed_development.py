@@ -40,6 +40,16 @@ def stable_key(prefix, value):
     return f"phase5-{prefix}-{digest}"
 
 
+MULTI_STAFF_TASK_LABELS = {
+    "Review IR binder, Communication Book, WISH, Inclusion, schedule, and DNA list",
+    "Review Heat Hut",
+    "Check and reply to emails",
+    "Complete leave requests and maintenance requests",
+    "Submit leave requests",
+    "Complete Citation training",
+}
+
+
 class Command(BaseCommand):
     help = "Idempotently seed the authoritative Phase 5 Sonder House configuration."
 
@@ -142,6 +152,9 @@ class Command(BaseCommand):
                             "is_active": True,
                             "scheduled_start": None,
                             "scheduled_end": None,
+                            "required_staff_completions": (
+                                2 if spec["label"] in MULTI_STAFF_TASK_LABELS else 1
+                            ),
                         },
                     )
                     expected_task_ids.append(task_definition.pk)

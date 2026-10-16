@@ -28,15 +28,24 @@
     return button;
   };
 
-  const refreshActions = (card, state) => {
+  const refreshActions = (card, item) => {
     const form = card.querySelector("[data-item-form]");
     if (!form) return;
+    const state = item.state;
+    const required = Number(item.required_completion_count || form.dataset.requiredCompletions || 1);
+    const selectedHasCompletion = Boolean(item.selected_has_completion);
+    form.dataset.requiredCompletions = String(required);
+    form.dataset.selectedHasCompletion = String(selectedHasCompletion);
     form.querySelectorAll("button").forEach(button => button.remove());
     if (form.dataset.allowNa === "true" && state !== "na") {
       form.append(makeButton("N/A", "na", "na"));
     }
-    if (state !== "completed") form.append(makeButton("Complete", "completed", "complete"));
-    if (state !== "pending") form.append(makeButton("Reset", "pending", "reset"));
+    if (state !== "completed" && !selectedHasCompletion) {
+      form.append(makeButton("Complete", "completed", "complete"));
+    }
+    if (state === "na" || selectedHasCompletion || (required === 1 && state === "completed")) {
+      form.append(makeButton("Reset", "pending", "reset"));
+    }
     if (card.classList.contains("is-saving")) {
       form.querySelectorAll("button").forEach(button => { button.disabled = true; });
     }
@@ -60,7 +69,7 @@
       time.dateTime = item.changed_at || "";
       time.textContent = item.changed_at_label || "";
     }
-    refreshActions(card, item.state);
+    refreshActions(card, item);
   };
 
   const refreshContributions = contributions => {
@@ -144,6 +153,8 @@
       staff_name: checklist.dataset.currentStaff,
       changed_at: "",
       changed_at_label: "Saving…",
+      required_completion_count: Number(form.dataset.requiredCompletions || 1),
+      selected_has_completion: submitter.value === "completed",
     });
     try {
       const response = await fetch(form.action, {
@@ -167,4 +178,20 @@
     if (!document.hidden) fetchState();
   });
   window.setInterval(fetchState, pollIntervalMs);
+
+  const confirmationForm = checklist.querySelector("[data-confirmation-form]");
+  if (confirmationForm) {
+    confirmationForm.addEventListener("submit", event => {
+      const input = confirmationForm.querySelector('[name="name_confirmation"]');
+      const matches = input.value.trim().toLocaleLowerCase() ===
+        confirmationForm.dataset.staffName.trim().toLocaleLowerCase();
+      input.setCustomValidity(matches
+        ? ""
+        : "Enter the selected staff member's complete name.");
+      if (!matches) {
+        event.preventDefault();
+        input.reportValidity();
+      }
+    });
+  }
 })();

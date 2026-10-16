@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time, timedelta
 from pathlib import Path
 from threading import Barrier
+from unittest.mock import patch
 
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.messages import get_messages
@@ -39,6 +40,12 @@ class Phase5FixtureMixin:
     operational_date = date(2026, 9, 18)
 
     def setUp(self):
+        self.localdate = patch(
+            "checklists.operational_dates.timezone.localdate",
+            return_value=date(2026, 9, 20),
+        )
+        self.localdate.start()
+        self.addCleanup(self.localdate.stop)
         User = get_user_model()
         self.program = Program.objects.create(name="Sonder House", slug="phase5")
         self.operator = User.objects.create_user("JSmith", password="phase-five-password")
@@ -282,7 +289,7 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
 
         response = self.client.post(
             reverse("update-discrepancy", args=(instance.pk,)),
-            {"staff": self.staff_a.pk, "explanation": "   \r\n  "},
+            {"staff": self.staff_a.pk, "explanation": "   \r\n  ", "name_confirmation": self.staff_a.display_name},
         )
         self.assertRedirects(
             response, reverse("dashboard"), fetch_redirect_response=False
@@ -293,7 +300,7 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
 
         response = self.client.post(
             reverse("update-discrepancy", args=(instance.pk,)),
-            {"staff": self.staff_b.pk, "explanation": "\t"},
+            {"staff": self.staff_b.pk, "explanation": "\t", "name_confirmation": self.staff_b.display_name},
         )
         self.assertRedirects(
             response, reverse("dashboard"), fetch_redirect_response=False
@@ -307,7 +314,7 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
 
         response = self.client.post(
             reverse("update-discrepancy", args=(instance.pk,)),
-            {"staff": self.staff_a.pk, "explanation": "Saved update"},
+            {"staff": self.staff_a.pk, "explanation": "Saved update", "name_confirmation": self.staff_a.display_name},
         )
         self.assertRedirects(
             response, reverse("dashboard"), fetch_redirect_response=False
@@ -735,6 +742,7 @@ class RoleAndAdminAuthorizationTests(Phase5FixtureMixin, TestCase):
             ),
             {
                 "label": task_from_admin.label,
+                "required_staff_completions": "1",
                 "is_active": "on",
                 "section_memberships-TOTAL_FORMS": "1",
                 "section_memberships-INITIAL_FORMS": "0",

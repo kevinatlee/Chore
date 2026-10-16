@@ -45,7 +45,7 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
 .date-control-display { display: none; }
 .date-control-input { display: block; width: 100%; max-width: 100%; min-width: 0; height: var(--control-height); }
 .definition-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; }
-.definition-card, .auth-card, .empty-state, .contribution-panel, .discrepancy-panel { padding: 1.4rem; background: var(--surface); border: 1px solid var(--line); border-radius: .8rem; box-shadow: 0 2px 12px rgb(25 45 55 / 5%); }
+.definition-card, .auth-card, .empty-state, .contribution-panel, .discrepancy-panel, .feedback-panel { padding: 1.4rem; background: var(--surface); border: 1px solid var(--line); border-radius: .8rem; box-shadow: 0 2px 12px rgb(25 45 55 / 5%); }
 .definition-card { display: flex; flex-direction: column; align-items: flex-start; }
 .definition-card .button { margin-top: auto; }
 .button { display: inline-flex; min-height: 2.6rem; padding: .55rem .9rem; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: .5rem; font-weight: 750; text-decoration: none; cursor: pointer; }
@@ -128,7 +128,15 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
 .discrepancy-panel { margin-top: 3rem; }
 .discrepancy-form { display: flex; align-items: stretch; gap: .65rem; }
 .discrepancy-form textarea { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 3.25rem; resize: vertical; }
-.discrepancy-form .button { flex: 0 0 auto; align-self: stretch; }
+.final-submission { display: grid; flex: 0 0 min(20rem, 38%); align-content: end; gap: .35rem; }
+.final-submission label, .field-group label, .program-switcher label { font-weight: 750; }
+.final-submission input, .feedback-form select, .feedback-form textarea, .program-switcher select { width: 100%; }
+.field-error { margin: 0; color: #9b1c1c; font-size: .85rem; font-weight: 700; }
+.feedback-panel { max-width: 44rem; }
+.feedback-form { display: grid; gap: 1rem; }
+.field-group { display: grid; gap: .35rem; }
+.feedback-form .button { justify-self: end; }
+.program-switcher { max-width: 24rem; margin-bottom: 1rem; }
 .task-actions button:disabled { cursor: wait; opacity: .65; }
 .button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid #2e8172; outline-offset: 2px;
@@ -149,7 +157,7 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
   .task-actions { margin: .9rem 0 0; flex-wrap: wrap; justify-content: flex-end; }
   .task-actions .button { flex: 1; }
   .discrepancy-form { flex-direction: column; }
-  .discrepancy-form .button { align-self: auto; }
+  .final-submission { flex-basis: auto; }
   .progress-summary { display: inline-block; margin-top: 1rem; }
   .shared-workflow-notice { display: block; margin-top: 0; }
   .sync-status { display: inline-block; margin-top: .7rem; }

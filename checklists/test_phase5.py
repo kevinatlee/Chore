@@ -473,6 +473,29 @@ class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
         self.assertContains(response, 'aria-label="Comments for Incomplete Tasks"')
         self.assertNotContains(response, 'name="explanation" rows="2" aria-label="Comments for Incomplete Tasks" required')
 
+        notice_position = content.index(
+            "Marking a task complete implies the work being reported is satisfactorily completed."
+        )
+        panel_position = content.index('<section class="discrepancy-panel">')
+        name_position = content.index('name="name_confirmation"')
+        comments_position = content.index('name="explanation"')
+        submit_position = content.index('type="submit">Submit</button>')
+        self.assertLess(notice_position, panel_position)
+        self.assertLess(name_position, comments_position)
+        self.assertLess(comments_position, submit_position)
+        self.assertContains(response, 'class="visually-hidden" for="name-confirmation"')
+        self.assertContains(response, 'placeholder="Your Name Here"')
+        self.assertNotContains(response, '<label for="name-confirmation">Your Name Here</label>')
+
+        stylesheet = (
+            Path(__file__).resolve().parent / "static" / "checklists" / "styles.css"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".name-confirmation-field {", stylesheet)
+        self.assertIn("margin-left: auto", stylesheet)
+        self.assertIn(".discrepancy-entry-row .button { flex: 0 0 8.5rem", stylesheet)
+        self.assertIn(".discrepancy-entry-row { flex-direction: column; }", stylesheet)
+        self.assertIn(".discrepancy-entry-row .button { flex-basis: auto; width: 100%", stylesheet)
+
     def test_initial_and_synchronized_actions_put_na_first(self):
         response = self.render_checklist()
         optional_item = self.instance.items.get(source_task=self.normal_task)

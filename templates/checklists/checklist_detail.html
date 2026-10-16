@@ -24,14 +24,6 @@
     </div>
   </div>
 
-  <div class="shared-workflow-notice" role="status">
-    <div>
-      <span class="shared-notice-line">Marking a task complete implies the work being reported is satisfactorily completed.</span>
-      <span class="shared-notice-line">These lists allow collaboration, updates from colleagues appear automatically.</span>
-    </div>
-    <span class="sync-status" id="sync-status" aria-live="polite">Up to date</span>
-  </div>
-
   {% for section in sections %}
     <section class="task-section">
       <h2>{{ section.name }}</h2>
@@ -102,16 +94,26 @@
     </div>
   {% endfor %}
 
+  <div class="shared-workflow-notice" role="status">
+    <div>
+      <span class="shared-notice-line">Marking a task complete implies the work being reported is satisfactorily completed.</span>
+      <span class="shared-notice-line">These lists allow collaboration, updates from colleagues appear automatically.</span>
+    </div>
+    <span class="sync-status" id="sync-status" aria-live="polite">Up to date</span>
+  </div>
+
   <section class="discrepancy-panel">
     <h2>Comments for Incomplete Tasks</h2>
     <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="discrepancy-form" data-confirmation-form data-staff-name="{{ staff_member.display_name }}">
       {% csrf_token %}
       <input type="hidden" name="staff" value="{{ staff_member.pk }}">
-      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ explanation_value }}</textarea>
-      <div class="final-submission">
-        <label for="name-confirmation">Your Name Here</label>
-        <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" autocomplete="name" required aria-describedby="name-confirmation-error">
+      <div class="name-confirmation-field">
+        <label class="visually-hidden" for="name-confirmation">Your Name Here</label>
+        <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" placeholder="Your Name Here" autocomplete="name" required aria-describedby="name-confirmation-error">
         {% if confirmation_error %}<p class="field-error" id="name-confirmation-error" role="alert">{{ confirmation_error }}</p>{% endif %}
+      </div>
+      <div class="discrepancy-entry-row">
+        <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ explanation_value }}</textarea>
         <button class="button primary" type="submit">Submit</button>
       </div>
     </form>

@@ -411,7 +411,7 @@ class ManualRefreshTests(SimpleTestCase):
             return connection.execute("SELECT value FROM marker").fetchone()[0]
 
     def test_explicit_snapshot_refresh_creates_recovery_and_removes_sidecars(self):
-        with TemporaryDirectory(dir=Path.cwd() / ".tmp") as directory:
+        with TemporaryDirectory() as directory:
             root = Path(directory)
             backups = root / "backups"
             backups.mkdir()
@@ -437,7 +437,7 @@ class ManualRefreshTests(SimpleTestCase):
             self.assertEqual(self.marker(source), "production-copy")
 
     def test_explicit_source_outside_backup_mount_is_refused(self):
-        with TemporaryDirectory(dir=Path.cwd() / ".tmp") as directory:
+        with TemporaryDirectory() as directory:
             root = Path(directory)
             backups = root / "backups"
             backups.mkdir()

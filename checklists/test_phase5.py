@@ -492,9 +492,23 @@ class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn(".name-confirmation-field {", stylesheet)
         self.assertIn("margin-left: auto", stylesheet)
-        self.assertIn(".discrepancy-entry-row .button { flex: 0 0 8.5rem", stylesheet)
-        self.assertIn(".discrepancy-entry-row { flex-direction: column; }", stylesheet)
-        self.assertIn(".discrepancy-entry-row .button { flex-basis: auto; width: 100%", stylesheet)
+        self.assertIn(
+            "grid-template-columns: minmax(0, 1fr) 8.5rem", stylesheet
+        )
+        self.assertIn('grid-template-areas: "heading ." "comments submit"', stylesheet)
+        self.assertIn(
+            ".discrepancy-heading-row { grid-area: heading; display: flex; "
+            "justify-content: space-between; align-items: center",
+            stylesheet,
+        )
+        self.assertIn(".discrepancy-form textarea { grid-area: comments", stylesheet)
+        self.assertIn(".discrepancy-form > .button { grid-area: submit", stylesheet)
+        self.assertIn('grid-template-areas: "heading" "comments" "submit"', stylesheet)
+        self.assertIn(
+            ".discrepancy-heading-row { flex-direction: column; "
+            "align-items: stretch; }",
+            stylesheet,
+        )
 
     def test_initial_and_synchronized_actions_put_na_first(self):
         response = self.render_checklist()

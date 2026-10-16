@@ -130,12 +130,16 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
 .task-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: .45rem; margin-left: auto; }
 .programming-activity-input { display: block; width: min(32rem, 100%); min-height: 2.75rem; margin: .25rem 0 .5rem; resize: vertical; }
 .discrepancy-panel { margin-top: 0; }
-.discrepancy-form { display: grid; gap: .65rem; }
+.discrepancy-form {
+  display: grid; grid-template-columns: minmax(0, 1fr) 8.5rem;
+  grid-template-areas: "heading ." "comments submit"; gap: .65rem;
+}
+.discrepancy-heading-row { grid-area: heading; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.discrepancy-heading-row h2 { margin-bottom: 0; }
 .name-confirmation-field { display: grid; width: min(20rem, 100%); margin-left: auto; gap: .35rem; }
 .name-confirmation-field input, .feedback-form select, .feedback-form textarea, .program-switcher select { width: 100%; }
-.discrepancy-entry-row { display: flex; align-items: stretch; gap: .65rem; }
-.discrepancy-entry-row textarea { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 3.25rem; resize: vertical; }
-.discrepancy-entry-row .button { flex: 0 0 8.5rem; padding-inline: 1.5rem; }
+.discrepancy-form textarea { grid-area: comments; width: 100%; min-width: 0; min-height: 3.25rem; resize: vertical; }
+.discrepancy-form > .button { grid-area: submit; padding-inline: 1.5rem; }
 .field-group label, .program-switcher label { font-weight: 750; }
 .field-error { margin: 0; color: #9b1c1c; font-size: .85rem; font-weight: 700; }
 .feedback-panel { max-width: 44rem; }
@@ -162,9 +166,10 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
   .task-card { display: block; }
   .task-actions { margin: .9rem 0 0; flex-wrap: wrap; justify-content: flex-end; }
   .task-actions .button { flex: 1; }
-  .name-confirmation-field { width: 100%; }
-  .discrepancy-entry-row { flex-direction: column; }
-  .discrepancy-entry-row .button { flex-basis: auto; width: 100%; min-height: 3.25rem; }
+  .discrepancy-form { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "comments" "submit"; }
+  .discrepancy-heading-row { flex-direction: column; align-items: stretch; }
+  .name-confirmation-field { width: 100%; margin-left: 0; }
+  .discrepancy-form > .button { width: 100%; min-height: 3.25rem; }
   .progress-summary { display: inline-block; margin-top: 1rem; }
   .shared-workflow-notice { display: block; }
   .sync-status { display: inline-block; margin-top: .7rem; }

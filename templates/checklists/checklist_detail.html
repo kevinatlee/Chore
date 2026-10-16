@@ -103,19 +103,19 @@
   </div>
 
   <section class="discrepancy-panel">
-    <h2>Comments for Incomplete Tasks</h2>
     <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="discrepancy-form" data-confirmation-form data-staff-name="{{ staff_member.display_name }}">
       {% csrf_token %}
       <input type="hidden" name="staff" value="{{ staff_member.pk }}">
-      <div class="name-confirmation-field">
-        <label class="visually-hidden" for="name-confirmation">Your Name Here</label>
-        <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" placeholder="Your Name Here" autocomplete="name" required aria-describedby="name-confirmation-error">
-        {% if confirmation_error %}<p class="field-error" id="name-confirmation-error" role="alert">{{ confirmation_error }}</p>{% endif %}
+      <div class="discrepancy-heading-row">
+        <h2>Comments for Incomplete Tasks</h2>
+        <div class="name-confirmation-field">
+          <label class="visually-hidden" for="name-confirmation">Your Name Here</label>
+          <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" placeholder="Your Name Here" autocomplete="name" required aria-describedby="name-confirmation-error">
+          {% if confirmation_error %}<p class="field-error" id="name-confirmation-error" role="alert">{{ confirmation_error }}</p>{% endif %}
+        </div>
       </div>
-      <div class="discrepancy-entry-row">
-        <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ explanation_value }}</textarea>
-        <button class="button primary" type="submit">Submit</button>
-      </div>
+      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ explanation_value }}</textarea>
+      <button class="button primary" type="submit">Submit</button>
     </form>
   </section>
 

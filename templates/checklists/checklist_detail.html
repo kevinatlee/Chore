@@ -48,7 +48,7 @@
                 ></textarea>
               {% endif %}
               <div class="task-attribution">
-                <span class="status status-{{ item.current_state }}" data-item-status>{% if item.required_staff_completions_snapshot > 1 and item.current_state != 'na' %}{{ item.active_completion_count }} of {{ item.required_staff_completions_snapshot }} completed{% else %}{{ item.get_current_state_display }}{% endif %}</span>
+                <span class="status status-{{ item.current_state }}" data-item-status>{% if item.required_staff_completions_snapshot > 1 and item.current_state != 'na' %}{{ item.active_completion_count }} of {{ item.required_staff_completions_snapshot }} Completed{% else %}{{ item.get_current_state_display }}{% endif %}</span>
                 {% if show_audit %}
                   {% if item.current_staff %}
                     <span data-item-contributor>Staff Contribution by {{ item.current_staff.display_name }}</span>
@@ -109,8 +109,8 @@
       <div class="discrepancy-heading-row">
         <h2>Comments for Incomplete Tasks</h2>
         <div class="name-confirmation-field">
-          <label class="visually-hidden" for="name-confirmation">Your Name Here</label>
-          <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" placeholder="Your Name Here" autocomplete="name" required aria-describedby="name-confirmation-error">
+          <label class="visually-hidden" for="name-confirmation">Enter Your Name Here</label>
+          <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" placeholder="Enter Your Name Here" autocomplete="name" required aria-describedby="name-confirmation-error">
           {% if confirmation_error %}<p class="field-error" id="name-confirmation-error" role="alert">{{ confirmation_error }}</p>{% endif %}
         </div>
       </div>

@@ -110,7 +110,7 @@ def _checklist_state_payload(instance, *, staff_member=None, include_audit=False
                 "state": item.current_state,
                 "state_label": (
                     f"{len(active_by_item.get(item.id, []))} of "
-                    f"{item.required_staff_completions_snapshot} completed"
+                    f"{item.required_staff_completions_snapshot} Completed"
                     if item.required_staff_completions_snapshot > 1
                     and item.current_state != TaskState.NOT_APPLICABLE
                     else item.get_current_state_display()

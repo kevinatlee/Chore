@@ -137,6 +137,7 @@ select { height: var(--control-height); min-height: var(--control-height); paddi
 .discrepancy-heading-row { grid-area: heading; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .discrepancy-heading-row h2 { margin-bottom: 0; }
 .name-confirmation-field { display: grid; width: min(20rem, 100%); margin-left: auto; gap: .35rem; }
+.name-confirmation-field input { text-align: center; }
 .name-confirmation-field input, .feedback-form select, .feedback-form textarea, .program-switcher select { width: 100%; }
 .discrepancy-form textarea { grid-area: comments; width: 100%; min-width: 0; min-height: 3.25rem; resize: vertical; }
 .discrepancy-form > .button { grid-area: submit; padding-inline: 1.5rem; }

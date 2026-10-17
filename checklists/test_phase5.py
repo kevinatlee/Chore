@@ -484,13 +484,14 @@ class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
         self.assertLess(name_position, comments_position)
         self.assertLess(comments_position, submit_position)
         self.assertContains(response, 'class="visually-hidden" for="name-confirmation"')
-        self.assertContains(response, 'placeholder="Your Name Here"')
-        self.assertNotContains(response, '<label for="name-confirmation">Your Name Here</label>')
+        self.assertContains(response, 'placeholder="Enter Your Name Here"')
+        self.assertNotContains(response, '<label for="name-confirmation">Enter Your Name Here</label>')
 
         stylesheet = (
             Path(__file__).resolve().parent / "static" / "checklists" / "styles.css"
         ).read_text(encoding="utf-8")
         self.assertIn(".name-confirmation-field {", stylesheet)
+        self.assertIn(".name-confirmation-field input { text-align: center; }", stylesheet)
         self.assertIn("margin-left: auto", stylesheet)
         self.assertIn(
             "grid-template-columns: minmax(0, 1fr) 8.5rem", stylesheet

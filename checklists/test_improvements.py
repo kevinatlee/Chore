@@ -213,6 +213,8 @@ class MultiStaffCompletionTests(ImprovementFixtureMixin, TestCase):
         url = reverse("checklist-detail", args=(self.definition.pk,))
         jane = self.client.get(url, {"date": self.today, "staff": self.staff_a.pk})
         john = self.client.get(url, {"date": self.today, "staff": self.staff_b.pk})
+        self.assertContains(jane, "1 of 2 Completed")
+        self.assertContains(john, "1 of 2 Completed")
         jane_card = jane.content.decode().split(f'data-item-id="{self.item().pk}"', 1)[1].split("</article>", 1)[0]
         john_card = john.content.decode().split(f'data-item-id="{self.item().pk}"', 1)[1].split("</article>", 1)[0]
         self.assertIn('value="pending">Reset', jane_card)

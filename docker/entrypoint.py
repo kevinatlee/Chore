@@ -5,9 +5,6 @@ import sys
 import time
 from pathlib import Path
 
-from chore.sqlite_backups import BackupError, refresh_database_from_backup
-
-
 TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -21,19 +18,6 @@ def run_manage(*arguments):
         [sys.executable, "manage.py", *arguments],
         check=True,
         env=os.environ.copy(),
-    )
-
-
-def refresh_test_database():
-    backup_dir = os.environ.get("CHORE_PRODUCTION_BACKUP_DIR", "/production-backups")
-    destination = os.environ.get("CHORE_DATABASE_PATH", "/app/data/db.sqlite3")
-    try:
-        source, copied_database = refresh_database_from_backup(backup_dir, destination)
-    except (BackupError, OSError) as exc:
-        raise SystemExit(f"ChoreTest startup failed: {exc}") from exc
-    print(
-        f"ChoreTest database refreshed from {source.name} into {copied_database}.",
-        flush=True,
     )
 
 
@@ -107,7 +91,6 @@ def main():
     if mode == "test":
         if enabled("EMAIL_ENABLED", default=True):
             raise SystemExit("ChoreTest requires EMAIL_ENABLED=false.")
-        refresh_test_database()
     else:
         run_manage("backup_database", "--if-exists")
 

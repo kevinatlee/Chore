@@ -6,12 +6,14 @@ from django.contrib.auth.models import Group
 from django.db.models import Count
 
 from .models import (
+    ActiveTaskCompletion,
     AssignmentSectionMembership,
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
     ChecklistSection,
     DiscrepancyExplanation,
+    FeedbackSubmission,
     Program,
     ProgramMembership,
     ScheduledReportDelivery,
@@ -166,9 +168,15 @@ class ChecklistSectionAdmin(ActiveConfigurationAdminMixin, admin.ModelAdmin):
 
 @admin.register(TaskDefinition)
 class TaskDefinitionAdmin(ActiveConfigurationAdminMixin, admin.ModelAdmin):
-    list_display = ("short_label", "section_count", "allow_na", "requires_completion_note", "availability")
+    list_display = (
+        "short_label", "section_count", "required_staff_completions", "allow_na",
+        "requires_completion_note", "availability",
+    )
     list_editable = ("allow_na", "requires_completion_note")
-    list_filter = ("allow_na", "requires_completion_note", "is_active", "sections")
+    list_filter = (
+        "required_staff_completions", "allow_na", "requires_completion_note",
+        "is_active", "sections",
+    )
     search_fields = ("label",)
     inlines = (TaskSectionInline,)
 
@@ -253,6 +261,34 @@ class StaffContributionAdmin(ClearAdminMixin, admin.ModelAdmin):
     list_filter = ("new_state", "item__instance__category", "item__instance__shift")
     search_fields = ("staff__first_name", "staff__last_name", "recorded_by__username", "activity_text")
     readonly_fields = tuple(field.name for field in StaffContribution._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ActiveTaskCompletion)
+class ActiveTaskCompletionAdmin(ClearAdminMixin, admin.ModelAdmin):
+    list_display = ("item", "staff", "completed_at", "is_active", "reset_at")
+    list_filter = ("is_active", "item__instance__category", "item__instance__shift")
+    search_fields = ("staff__first_name", "staff__last_name", "item__task_label_snapshot")
+    readonly_fields = tuple(field.name for field in ActiveTaskCompletion._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(FeedbackSubmission)
+class FeedbackSubmissionAdmin(ClearAdminMixin, admin.ModelAdmin):
+    list_display = ("submitted_at", "program", "staff", "submitted_by", "email_state")
+    list_filter = ("program", "email_state", "submitted_at")
+    search_fields = ("staff__first_name", "staff__last_name", "content")
+    readonly_fields = tuple(field.name for field in FeedbackSubmission._meta.fields)
 
     def has_add_permission(self, request):
         return False

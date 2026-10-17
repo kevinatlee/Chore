@@ -1,7 +1,11 @@
+import uuid
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 
 def get_default_program_pk():
@@ -237,6 +241,12 @@ class TaskDefinition(models.Model):
     is_active = models.BooleanField(default=True)
     scheduled_start = models.TimeField(null=True, blank=True)
     scheduled_end = models.TimeField(null=True, blank=True)
+    required_staff_completions = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+        verbose_name="Required Staff Completions",
+        help_text="Number of distinct staff who must complete each new task instance.",
+    )
 
     class Meta:
         ordering = ("label", "id")
@@ -249,6 +259,10 @@ class TaskDefinition(models.Model):
                     | Q(scheduled_start__isnull=False, scheduled_end__isnull=False)
                 ),
                 name="task_schedule_times_both_or_neither",
+            ),
+            models.CheckConstraint(
+                condition=Q(required_staff_completions__gte=1),
+                name="task_required_staff_completions_gte_1",
             ),
         ]
 
@@ -400,6 +414,10 @@ class ChecklistItem(models.Model):
     requires_completion_note_snapshot = models.BooleanField(default=False)
     scheduled_start_snapshot = models.TimeField(null=True, blank=True)
     scheduled_end_snapshot = models.TimeField(null=True, blank=True)
+    required_staff_completions_snapshot = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+    )
     current_state = models.CharField(
         max_length=16, choices=TaskState.choices, default=TaskState.PENDING
     )
@@ -432,6 +450,10 @@ class ChecklistItem(models.Model):
             models.CheckConstraint(
                 condition=(~Q(current_state=TaskState.NOT_APPLICABLE) | Q(allow_na_snapshot=True)),
                 name="na_requires_snapshot_permission",
+            ),
+            models.CheckConstraint(
+                condition=Q(required_staff_completions_snapshot__gte=1),
+                name="item_required_staff_completions_gte_1",
             ),
         ]
         verbose_name = "task instance"
@@ -489,6 +511,48 @@ class StaffContribution(models.Model):
         return f"{self.staff}: {self.previous_state} → {self.new_state}"
 
 
+class ActiveTaskCompletion(models.Model):
+    """The current per-staff completion set; StaffContribution remains the audit log."""
+
+    item = models.ForeignKey(
+        ChecklistItem, on_delete=models.CASCADE, related_name="active_completions"
+    )
+    staff = models.ForeignKey(
+        StaffMember, on_delete=models.PROTECT, related_name="active_task_completions"
+    )
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_active_task_completions",
+        null=True,
+        blank=True,
+    )
+    completed_at = models.DateTimeField(default=timezone.now)
+    is_active = models.BooleanField(default=True)
+    reset_at = models.DateTimeField(null=True, blank=True)
+    reset_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="reset_active_task_completions",
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ("completed_at", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("item", "staff"),
+                condition=Q(is_active=True),
+                name="unique_active_item_staff_completion",
+            )
+        ]
+
+    def __str__(self):
+        state = "active" if self.is_active else "reset"
+        return f"{self.item} — {self.staff} ({state})"
+
+
 class DiscrepancyExplanation(models.Model):
     instance = models.ForeignKey(
         ChecklistInstance, on_delete=models.PROTECT, related_name="discrepancy_explanations"
@@ -533,6 +597,48 @@ class DeliveryState(models.TextChoices):
     PENDING = "pending", "Pending"
     SENT = "sent", "Sent"
     FAILED = "failed", "Failed"
+
+
+class FeedbackEmailState(models.TextChoices):
+    PENDING = "pending", "Pending"
+    SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
+    SUPPRESSED = "suppressed", "Suppressed"
+
+
+class FeedbackSubmission(models.Model):
+    program = models.ForeignKey(
+        Program, on_delete=models.PROTECT, related_name="feedback_submissions"
+    )
+    staff = models.ForeignKey(
+        StaffMember, on_delete=models.PROTECT, related_name="feedback_submissions"
+    )
+    content = models.TextField()
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="feedback_submissions",
+        null=True,
+        blank=True,
+    )
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    idempotency_key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    email_state = models.CharField(
+        max_length=16,
+        choices=FeedbackEmailState.choices,
+        default=FeedbackEmailState.PENDING,
+    )
+    email_sent_at = models.DateTimeField(null=True, blank=True)
+    email_error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ("-submitted_at", "-id")
+        verbose_name = "feedback submission"
+        verbose_name_plural = "feedback submissions"
+
+    def __str__(self):
+        submitted = self.submitted_at.strftime("%Y-%m-%d") if self.submitted_at else "unsaved"
+        return f"{self.program} — {self.staff} — {submitted}"
 
 
 class ScheduledReportDelivery(models.Model):

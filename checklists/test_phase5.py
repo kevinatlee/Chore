@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, time, timedelta
 from pathlib import Path
 from threading import Barrier
+from unittest.mock import patch
 
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.messages import get_messages
@@ -39,6 +40,12 @@ class Phase5FixtureMixin:
     operational_date = date(2026, 9, 18)
 
     def setUp(self):
+        self.localdate = patch(
+            "checklists.operational_dates.timezone.localdate",
+            return_value=date(2026, 9, 20),
+        )
+        self.localdate.start()
+        self.addCleanup(self.localdate.stop)
         User = get_user_model()
         self.program = Program.objects.create(name="Sonder House", slug="phase5")
         self.operator = User.objects.create_user("JSmith", password="phase-five-password")
@@ -282,7 +289,7 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
 
         response = self.client.post(
             reverse("update-discrepancy", args=(instance.pk,)),
-            {"staff": self.staff_a.pk, "explanation": "   \r\n  "},
+            {"staff": self.staff_a.pk, "explanation": "   \r\n  ", "name_confirmation": self.staff_a.display_name},
         )
         self.assertRedirects(
             response, reverse("dashboard"), fetch_redirect_response=False
@@ -293,7 +300,7 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
 
         response = self.client.post(
             reverse("update-discrepancy", args=(instance.pk,)),
-            {"staff": self.staff_b.pk, "explanation": "\t"},
+            {"staff": self.staff_b.pk, "explanation": "\t", "name_confirmation": self.staff_b.display_name},
         )
         self.assertRedirects(
             response, reverse("dashboard"), fetch_redirect_response=False
@@ -307,7 +314,7 @@ class PrivacyAndEntryTests(Phase5FixtureMixin, TestCase):
 
         response = self.client.post(
             reverse("update-discrepancy", args=(instance.pk,)),
-            {"staff": self.staff_a.pk, "explanation": "Saved update"},
+            {"staff": self.staff_a.pk, "explanation": "Saved update", "name_confirmation": self.staff_a.display_name},
         )
         self.assertRedirects(
             response, reverse("dashboard"), fetch_redirect_response=False
@@ -465,6 +472,44 @@ class PresentationCorrectionTests(Phase5FixtureMixin, TestCase):
         self.assertNotContains(response, '<label for="discrepancy-explanation">')
         self.assertContains(response, 'aria-label="Comments for Incomplete Tasks"')
         self.assertNotContains(response, 'name="explanation" rows="2" aria-label="Comments for Incomplete Tasks" required')
+
+        notice_position = content.index(
+            "Marking a task complete implies the work being reported is satisfactorily completed."
+        )
+        panel_position = content.index('<section class="discrepancy-panel">')
+        name_position = content.index('name="name_confirmation"')
+        comments_position = content.index('name="explanation"')
+        submit_position = content.index('type="submit">Submit</button>')
+        self.assertLess(notice_position, panel_position)
+        self.assertLess(name_position, comments_position)
+        self.assertLess(comments_position, submit_position)
+        self.assertContains(response, 'class="visually-hidden" for="name-confirmation"')
+        self.assertContains(response, 'placeholder="Enter Your Name Here"')
+        self.assertNotContains(response, '<label for="name-confirmation">Enter Your Name Here</label>')
+
+        stylesheet = (
+            Path(__file__).resolve().parent / "static" / "checklists" / "styles.css"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".name-confirmation-field {", stylesheet)
+        self.assertIn(".name-confirmation-field input { text-align: center; }", stylesheet)
+        self.assertIn("margin-left: auto", stylesheet)
+        self.assertIn(
+            "grid-template-columns: minmax(0, 1fr) 8.5rem", stylesheet
+        )
+        self.assertIn('grid-template-areas: "heading ." "comments submit"', stylesheet)
+        self.assertIn(
+            ".discrepancy-heading-row { grid-area: heading; display: flex; "
+            "justify-content: space-between; align-items: center",
+            stylesheet,
+        )
+        self.assertIn(".discrepancy-form textarea { grid-area: comments", stylesheet)
+        self.assertIn(".discrepancy-form > .button { grid-area: submit", stylesheet)
+        self.assertIn('grid-template-areas: "heading" "comments" "submit"', stylesheet)
+        self.assertIn(
+            ".discrepancy-heading-row { flex-direction: column; "
+            "align-items: stretch; }",
+            stylesheet,
+        )
 
     def test_initial_and_synchronized_actions_put_na_first(self):
         response = self.render_checklist()
@@ -735,6 +780,7 @@ class RoleAndAdminAuthorizationTests(Phase5FixtureMixin, TestCase):
             ),
             {
                 "label": task_from_admin.label,
+                "required_staff_completions": "1",
                 "is_active": "on",
                 "section_memberships-TOTAL_FORMS": "1",
                 "section_memberships-INITIAL_FORMS": "0",

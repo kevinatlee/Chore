@@ -7,6 +7,7 @@ from django.db.models import Subquery
 
 from .presentation import display_task_text
 from .models import (
+    ActiveTaskCompletion,
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
@@ -198,6 +199,11 @@ def build_report(*, program, period, filters=None):
     contributions_by_item = defaultdict(list)
     for contribution in report_contributions:
         contributions_by_item[contribution.item_id].append(contribution)
+    active_completions_by_item = defaultdict(list)
+    for completion in ActiveTaskCompletion.objects.filter(
+        item_id__in=Subquery(item_ids), is_active=True
+    ).select_related("staff").order_by("item_id", "completed_at", "id"):
+        active_completions_by_item[completion.item_id].append(completion)
     items_by_instance = defaultdict(list)
     for item in report_items:
         items_by_instance[item.instance_id].append(item)
@@ -287,13 +293,10 @@ def build_report(*, program, period, filters=None):
         checklist_contributors = {}
         for item in items_by_instance[instance.pk]:
             production_contributions = contributions_by_item[item.pk]
-            effective_state = (
-                production_contributions[-1].new_state
-                if production_contributions
-                else TaskState.PENDING
-            )
+            effective_state = item.current_state
             if effective_state == TaskState.NOT_APPLICABLE and not item.allow_na_snapshot:
                 effective_state = TaskState.PENDING
+            active_completions = active_completions_by_item[item.pk]
             for contribution in production_contributions:
                 checklist_contributors[contribution.staff_id] = _user_name(contribution.staff)
             tasks.append(
@@ -302,8 +305,24 @@ def build_report(*, program, period, filters=None):
                     "section": item.section_name_snapshot,
                     "label": display_task_text(item.task_label_snapshot),
                     "state": effective_state,
-                    "state_label": dict(TaskState.choices)[effective_state],
+                    "state_label": (
+                        f"{len(active_completions)} of "
+                        f"{item.required_staff_completions_snapshot} completed"
+                        if item.required_staff_completions_snapshot > 1
+                        and effective_state != TaskState.NOT_APPLICABLE
+                        else dict(TaskState.choices)[effective_state]
+                    ),
                     "allow_na": item.allow_na_snapshot,
+                    "required_completion_count": item.required_staff_completions_snapshot,
+                    "actual_completion_count": len(active_completions),
+                    "active_completions": [
+                        {
+                            "staff": _user_name(completion.staff),
+                            "staff_id": completion.staff_id,
+                            "completed_at": completion.completed_at,
+                        }
+                        for completion in active_completions
+                    ],
                     "changed_at": production_contributions[-1].created_at if production_contributions else None,
                     "contributor": _user_name(production_contributions[-1].staff) if production_contributions else "",
                     "contributor_id": production_contributions[-1].staff_id if production_contributions else None,
@@ -456,7 +475,7 @@ def report_snapshot(report):
                 ],
                 "tasks": [
                     {
-                        **{key: value for key, value in task.items() if key not in {"changed_at", "contributions"}},
+                        **{key: value for key, value in task.items() if key not in {"changed_at", "contributions", "active_completions"}},
                         "changed_at": task["changed_at"].isoformat() if task["changed_at"] else None,
                         "contributions": [
                             {
@@ -464,6 +483,17 @@ def report_snapshot(report):
                                 "created_at": contribution["created_at"].isoformat(),
                             }
                             for contribution in task["contributions"]
+                        ],
+                        "active_completions": [
+                            {
+                                **{
+                                    key: value
+                                    for key, value in completion.items()
+                                    if key != "completed_at"
+                                },
+                                "completed_at": completion["completed_at"].isoformat(),
+                            }
+                            for completion in task["active_completions"]
                         ],
                     }
                     for task in row["tasks"]

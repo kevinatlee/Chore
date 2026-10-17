@@ -50,6 +50,12 @@ class OperationalFixtureMixin:
     operational_date = date(2026, 9, 16)
 
     def setUp(self):
+        self.localdate = patch(
+            "checklists.operational_dates.timezone.localdate",
+            return_value=date(2026, 9, 20),
+        )
+        self.localdate.start()
+        self.addCleanup(self.localdate.stop)
         User = get_user_model()
         self.program = Program.objects.create(name="Operational Fixture", slug="operational-fixture")
         self.operator = User.objects.create_user("operations", password="password")
@@ -993,6 +999,12 @@ class SimpleOperationalSeedTests(TestCase):
 
 class SeedCorrectionTests(TestCase):
     def setUp(self):
+        self.localdate = patch(
+            "checklists.operational_dates.timezone.localdate",
+            return_value=date(2026, 9, 20),
+        )
+        self.localdate.start()
+        self.addCleanup(self.localdate.stop)
         self.environment = patch.dict(
             os.environ,
             {"CHORE_OPERATIONAL_PASSWORD": "operational-password"},
@@ -1139,6 +1151,16 @@ class SeedCorrectionTests(TestCase):
             ).exists()
         )
         self.assertFalse(active_tasks.filter(label="Print needed forms").exists())
+        self.assertEqual(
+            active_tasks.filter(required_staff_completions=2).count(),
+            6,
+        )
+        self.assertEqual(
+            active_tasks.exclude(required_staff_completions=2).filter(
+                required_staff_completions=1
+            ).count(),
+            active_tasks.count() - 6,
+        )
         self.assertFalse(
             SectionTaskMembership.objects.filter(
                 task__label="Print needed forms",

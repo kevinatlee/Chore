@@ -4,7 +4,7 @@
 {% block content %}
 <div
   id="shared-checklist"
-  data-state-url="{% url 'checklist-state' instance.definition_id %}?date={{ instance.operational_date|date:'Y-m-d' }}"
+  data-state-url="{% url 'checklist-state' instance.definition_id %}?date={{ instance.operational_date|date:'Y-m-d' }}&amp;staff={{ staff_member.pk }}"
   data-revision="{{ checklist_revision }}"
   data-current-staff="{{ staff_member.display_name }}"
 >
@@ -22,14 +22,6 @@
       <strong><span id="resolved-count">{{ completed_count }}</span> / <span id="total-count">{{ total_count }}</span></strong>
       <span>Complete</span>
     </div>
-  </div>
-
-  <div class="shared-workflow-notice" role="status">
-    <div>
-      <span class="shared-notice-line">Marking a task complete implies the work being reported is satisfactorily completed.</span>
-      <span class="shared-notice-line">These lists allow collaboration, updates from colleagues appear automatically.</span>
-    </div>
-    <span class="sync-status" id="sync-status" aria-live="polite">Up to date</span>
   </div>
 
   {% for section in sections %}
@@ -56,7 +48,7 @@
                 ></textarea>
               {% endif %}
               <div class="task-attribution">
-                <span class="status status-{{ item.current_state }}" data-item-status>{{ item.get_current_state_display }}</span>
+                <span class="status status-{{ item.current_state }}" data-item-status>{% if item.required_staff_completions_snapshot > 1 and item.current_state != 'na' %}{{ item.active_completion_count }} of {{ item.required_staff_completions_snapshot }} Completed{% else %}{{ item.get_current_state_display }}{% endif %}</span>
                 {% if show_audit %}
                   {% if item.current_staff %}
                     <span data-item-contributor>Staff Contribution by {{ item.current_staff.display_name }}</span>
@@ -75,6 +67,8 @@
               id="task-form-{{ item.id }}"
               data-item-form
               data-allow-na="{{ item.allow_na_snapshot|yesno:'true,false' }}"
+              data-required-completions="{{ item.required_staff_completions_snapshot }}"
+              data-selected-has-completion="{{ item.selected_has_completion|yesno:'true,false' }}"
             >
               {% csrf_token %}
               <input type="hidden" name="date" value="{{ instance.operational_date|date:'Y-m-d' }}">
@@ -82,10 +76,10 @@
               {% if item.allow_na_snapshot and item.current_state != 'na' %}
                 <button class="button na" type="submit" name="state" value="na">N/A</button>
               {% endif %}
-              {% if item.current_state != 'completed' %}
+              {% if item.current_state != 'completed' and not item.selected_has_completion %}
                 <button class="button complete" type="submit" name="state" value="completed">Complete</button>
               {% endif %}
-              {% if item.current_state != 'pending' %}
+              {% if item.current_state == 'na' or item.selected_has_completion or item.required_staff_completions_snapshot == 1 and item.current_state == 'completed' %}
                 <button class="button reset" type="submit" name="state" value="pending">Reset</button>
               {% endif %}
             </form>
@@ -100,12 +94,27 @@
     </div>
   {% endfor %}
 
+  <div class="shared-workflow-notice" role="status">
+    <div>
+      <span class="shared-notice-line">Marking a task complete implies the work being reported is satisfactorily completed.</span>
+      <span class="shared-notice-line">These lists allow collaboration, updates from colleagues appear automatically.</span>
+    </div>
+    <span class="sync-status" id="sync-status" aria-live="polite">Up to date</span>
+  </div>
+
   <section class="discrepancy-panel">
-    <h2>Comments for Incomplete Tasks</h2>
-    <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="discrepancy-form">
+    <form method="post" action="{% url 'update-discrepancy' instance.id %}" class="discrepancy-form" data-confirmation-form data-staff-name="{{ staff_member.display_name }}">
       {% csrf_token %}
       <input type="hidden" name="staff" value="{{ staff_member.pk }}">
-      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ discrepancy.explanation }}</textarea>
+      <div class="discrepancy-heading-row">
+        <h2>Comments for Incomplete Tasks</h2>
+        <div class="name-confirmation-field">
+          <label class="visually-hidden" for="name-confirmation">Enter Your Name Here</label>
+          <input id="name-confirmation" name="name_confirmation" type="text" value="{{ confirmation_value }}" placeholder="Enter Your Name Here" autocomplete="name" required aria-describedby="name-confirmation-error">
+          {% if confirmation_error %}<p class="field-error" id="name-confirmation-error" role="alert">{{ confirmation_error }}</p>{% endif %}
+        </div>
+      </div>
+      <textarea id="discrepancy-explanation" name="explanation" rows="2" aria-label="Comments for Incomplete Tasks">{{ explanation_value }}</textarea>
       <button class="button primary" type="submit">Submit</button>
     </form>
   </section>

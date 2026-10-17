@@ -126,11 +126,11 @@ runs `python manage.py migrate --noinput`, collects static files, and starts the
 scheduler plus Gunicorn. On a brand-new empty appdata directory, migrations create the
 database and the scheduler creates the first valid backup after startup.
 
-At ChoreTest startup, the entrypoint first copies the newest valid production backup from
-the configured read-only mount into `/mnt/user/appdata/ChoreTest/db.sqlite3`. It then applies
-candidate migrations to that copy, collects static files, and starts Gunicorn. Existing
-ChoreTest database changes are intentionally replaced on every container start or
-recreation.
+At ChoreTest startup, the entrypoint uses the existing persistent
+`/mnt/user/appdata/ChoreTest/db.sqlite3`, applies candidate migrations, collects static
+files, and starts Gunicorn. An ordinary restart or Force Update never replaces the test
+database. Automatic restoration was removed because container restarts must not silently
+discard test-only data.
 
 ## Production-safe configuration updates
 
@@ -145,6 +145,27 @@ the database. Migration 0009 performs the active configuration corrections in pl
 `seed_development` is not required after a normal container update. Use that command only
 for a new empty installation or an intentional administrative reconciliation. Use
 `--reset-passwords` only when intentionally applying the configured operational password.
+
+For this release, migrations 0010–0011 add feedback and per-staff completion storage,
+snapshot the completion requirement, backfill existing completed items, and update only
+six exact stable-key/label task matches to require two staff. Audit the reviewed mapping
+before or after staging deployment with:
+
+```sh
+docker exec ChoreTest python manage.py configure_multistaff_tasks
+```
+
+The command is read-only unless `--apply` is supplied, reports every exact match, and
+refuses a partial or ambiguous mapping. Normal migration already applies the reviewed
+values; `--apply` is only an idempotent recovery/verification option. Never run
+`seed_development` to apply this production update.
+
+Before a future production deployment, verify a current daily backup exists and copy it to
+an additional immutable/pre-upgrade location. Review `python manage.py migrate --plan` on
+ChoreTest first. Database rollback means stopping Chore, restoring that verified
+pre-upgrade SQLite snapshot (including safe WAL/SHM handling below), and starting the
+matching prior image digest. Do not reverse these migrations against the live database:
+reversing 0010 would discard new feedback/completion tables and columns.
 
 ## Cloudflare Tunnel
 
@@ -166,23 +187,54 @@ after changing email configuration. The internal production scheduler invokes th
 idempotent Manager-report command at 08:00 Vancouver time. Only active Managers with
 **Receive scheduled reports** enabled and a non-empty email address are recipients.
 
-## Backups and ChoreTest refresh
+## Backups and explicit ChoreTest refresh
 
 The production scheduler runs at 02:00 and 08:00 Vancouver time. The backup command is
 idempotent and creates at most one `chore-YYYY-MM-DD.sqlite3` file per local day using
 Python's SQLite online backup API. Every completed snapshot is integrity-checked and
 atomically installed. Only the newest seven dated application backups are retained.
 
-At every ChoreTest start or recreation:
+Refreshing ChoreTest is a deliberate stopped-container operation. The helper refuses to
+run unless deployment mode is `test`, email is disabled, the operator confirms
+`ChoreTest`, and `--application-stopped` is supplied. It validates the source with SQLite
+`quick_check`, creates a timestamped online recovery snapshot under
+`/mnt/user/appdata/ChoreTest/refresh-backups/`, removes stale WAL/SHM/journal sidecars,
+copies through a temporary file, preserves destination mode and ownership where the
+platform permits, atomically replaces the database, and validates the result. The source
+backup is opened read-only and is never changed.
 
-1. Backup files are inspected newest first.
-2. The newest valid SQLite/Chore backup is copied to a temporary file inside test appdata.
-3. The copy is integrity-checked and atomically replaces ChoreTest's database.
-4. Candidate migrations run against the test copy only.
+Use the newest valid dated production backup:
 
-Existing ChoreTest changes are intentionally discarded. Corrupt backup files are skipped;
-startup fails clearly if no valid production backup exists. The read-only backup mount is
-never modified and the live production database is not mounted into ChoreTest.
+```sh
+docker stop ChoreTest
+docker run --rm --name ChoreTestRefresh \
+  --user 1000:1000 \
+  -e CHORE_DEPLOYMENT_MODE=test -e EMAIL_ENABLED=false \
+  -v /mnt/user/appdata/ChoreTest:/app/data \
+  -v /mnt/user/appdata/Chore/backups:/production-backups:ro \
+  --entrypoint python ghcr.io/kevinatlee/chore:test \
+  -m docker.refresh_test_database --confirm ChoreTest --application-stopped
+docker start ChoreTest
+docker exec ChoreTest python manage.py migrate --plan
+docker exec ChoreTest python manage.py check
+```
+
+Select a particular dated or manually named snapshot by adding an absolute container path,
+for example `--source /production-backups/chore-2026-10-15.sqlite3`. The selected file
+must be inside `/production-backups` and pass validation; its filename does not need to
+match the daily naming convention.
+
+If refresh fails before atomic replacement, the existing database remains in place. If
+post-replacement validation fails, the helper restores the pre-refresh recovery snapshot.
+To manually restore a prior ChoreTest database, keep ChoreTest stopped and copy the chosen
+validated `refresh-backups/choretest-before-refresh-*.sqlite3` to a temporary file alongside
+`db.sqlite3`, set ownership to `1000:1000`, remove `db.sqlite3-wal`, `db.sqlite3-shm`, and
+`db.sqlite3-journal`, then rename the temporary file atomically to `db.sqlite3`. Start
+ChoreTest and verify `/health/`, `python manage.py check`, and the expected data in the UI.
+
+Do not run the helper while ChoreTest is running or point `--database` at
+`/mnt/user/appdata/Chore/db.sqlite3`. `EMAIL_ENABLED=false` remains mandatory after every
+refresh, so copied production configuration cannot enable outbound test email.
 
 ## Restore production
 
@@ -198,8 +250,8 @@ mv /mnt/user/appdata/Chore/db.sqlite3.restore /mnt/user/appdata/Chore/db.sqlite3
 
 Start Chore again from the Unraid interface. Keep `db.sqlite3.before-restore` until the
 restored application has been verified. Startup applies migrations needed by the selected
-image. Restarting ChoreTest afterward refreshes it from the newest retained production
-backup, not directly from the just-restored live file.
+image. Restarting ChoreTest afterward preserves its existing test database. Run the
+explicit refresh procedure only if a new production snapshot is intentionally required.
 
 ## Health and troubleshooting
 
@@ -219,8 +271,8 @@ Common failures:
 - `DisallowedHost` or CSRF rejection: verify `APP_FQDN`, the Cloudflare public hostname,
   preserved Host header, and forwarded HTTPS header agree.
 - Redirect loop: Cloudflare is not sending `X-Forwarded-Proto: https`.
-- ChoreTest startup failure: production has not yet produced a valid backup, or the
-  read-only mount path/permissions are wrong.
+- ChoreTest refresh failure: confirm the container is stopped, the source exists in the
+  read-only backup mount, and both source and destination pass SQLite integrity checks.
 - SQLite write failure: appdata ownership is not UID/GID 1000 or the Unraid appdata share
   is not writable.
 - Gmail authentication failure: use a current App Password and verify the configured

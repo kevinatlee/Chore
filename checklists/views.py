@@ -12,11 +12,14 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
+from .forms import FeedbackForm
 from .models import (
+    ActiveTaskCompletion,
     ChecklistDefinition,
     ChecklistInstance,
     ChecklistItem,
     DiscrepancyExplanation,
+    FeedbackEmailState,
     StaffContribution,
     StaffMember,
     TaskState,
@@ -28,8 +31,10 @@ from .services import (
     can_view_contributor_audit,
     can_operate_program,
     change_item_state,
+    create_feedback_submission,
     definition_available_on_date,
     programs_for_operations,
+    programs_for_feedback,
     resolve_checklist,
     save_discrepancy_explanation,
 )
@@ -74,7 +79,7 @@ def _checklist_revision(instance):
     return str(latest_contribution_id or 0)
 
 
-def _checklist_state_payload(instance, *, include_audit=False):
+def _checklist_state_payload(instance, *, staff_member=None, include_audit=False):
     items = list(
         instance.items.select_related("current_staff").order_by(
             "section_order_snapshot",
@@ -88,6 +93,11 @@ def _checklist_state_payload(instance, *, include_audit=False):
         .select_related("staff", "item")
         .order_by("-created_at", "-id")[:10]
     )
+    active_by_item = {}
+    for completion in ActiveTaskCompletion.objects.filter(
+        item__instance=instance, is_active=True
+    ).select_related("staff"):
+        active_by_item.setdefault(completion.item_id, []).append(completion)
     resolved_count = sum(item.current_state != TaskState.PENDING for item in items)
     return {
         "changed": True,
@@ -98,7 +108,19 @@ def _checklist_state_payload(instance, *, include_audit=False):
             ({
                 "id": item.id,
                 "state": item.current_state,
-                "state_label": item.get_current_state_display(),
+                "state_label": (
+                    f"{len(active_by_item.get(item.id, []))} of "
+                    f"{item.required_staff_completions_snapshot} Completed"
+                    if item.required_staff_completions_snapshot > 1
+                    and item.current_state != TaskState.NOT_APPLICABLE
+                    else item.get_current_state_display()
+                ),
+                "completion_count": len(active_by_item.get(item.id, [])),
+                "required_completion_count": item.required_staff_completions_snapshot,
+                "selected_has_completion": any(
+                    staff_member is not None and completion.staff_id == staff_member.pk
+                    for completion in active_by_item.get(item.id, [])
+                ),
             } | ({
                 "staff_name": item.current_staff.display_name if item.current_staff else "",
                 "changed_at": item.state_changed_at.isoformat() if item.state_changed_at else "",
@@ -151,6 +173,7 @@ def dashboard(request):
     program = available_programs.filter(pk=program_id).first() if program_id else available_programs.first()
     if program is None:
         raise PermissionDenied("Operational-entry access is required.")
+    request.session["chore_active_program_id"] = program.pk
     try:
         operational_date = _selected_operational_date(request)
     except ValidationError as exc:
@@ -261,25 +284,33 @@ def open_checklist(request):
     )
 
 
-@login_required
-def checklist_detail(request, definition_id):
-    definition = _active_definition_for_operator(request, definition_id)
-    staff_member = get_object_or_404(
-        StaffMember,
-        pk=request.GET.get("staff"),
-        program=definition.category.program,
-        is_active=True,
-    )
-    try:
-        operational_date = _selected_operational_date(request)
-    except ValidationError as exc:
-        return HttpResponseBadRequest(" ".join(exc.messages))
-
+def _render_checklist_detail(
+    request,
+    *,
+    definition,
+    staff_member,
+    operational_date,
+    explanation_value=None,
+    confirmation_value="",
+    confirmation_error="",
+    status=200,
+):
     instance = resolve_checklist(definition, operational_date)
     show_audit = can_view_contributor_audit(request.user, instance.program_id)
-    items = instance.items.select_related("current_staff", "source_task").order_by(
+    items = list(instance.items.select_related("current_staff", "source_task").order_by(
         "section_order_snapshot", "task_order_snapshot", "scheduled_start_snapshot", "id"
-    )
+    ))
+    active_by_item = {}
+    for completion in ActiveTaskCompletion.objects.filter(
+        item__instance=instance, is_active=True
+    ).select_related("staff"):
+        active_by_item.setdefault(completion.item_id, []).append(completion)
+    for item in items:
+        item.active_completion_count = len(active_by_item.get(item.pk, []))
+        item.selected_has_completion = any(
+            completion.staff_id == staff_member.pk
+            for completion in active_by_item.get(item.pk, [])
+        )
     sections = []
     for item in items:
         if not sections or sections[-1]["name"] != item.section_name_snapshot:
@@ -294,6 +325,8 @@ def checklist_detail(request, definition_id):
     discrepancy = DiscrepancyExplanation.objects.filter(
         instance=instance, staff=staff_member
     ).first()
+    if explanation_value is None:
+        explanation_value = discrepancy.explanation if discrepancy else ""
     total_count = sum(len(section["items"]) for section in sections)
     completed_count = sum(
         item.current_state != TaskState.PENDING
@@ -308,6 +341,9 @@ def checklist_detail(request, definition_id):
             "sections": sections,
             "contributions": contributions,
             "discrepancy": discrepancy,
+            "explanation_value": explanation_value,
+            "confirmation_value": confirmation_value,
+            "confirmation_error": confirmation_error,
             "show_audit": show_audit,
             "states": TaskState,
             "total_count": total_count,
@@ -315,6 +351,28 @@ def checklist_detail(request, definition_id):
             "staff_member": staff_member,
             "checklist_revision": _checklist_revision(instance),
         },
+        status=status,
+    )
+
+
+@login_required
+def checklist_detail(request, definition_id):
+    definition = _active_definition_for_operator(request, definition_id)
+    staff_member = get_object_or_404(
+        StaffMember,
+        pk=request.GET.get("staff"),
+        program=definition.category.program,
+        is_active=True,
+    )
+    try:
+        operational_date = _selected_operational_date(request)
+    except ValidationError as exc:
+        return HttpResponseBadRequest(" ".join(exc.messages))
+    return _render_checklist_detail(
+        request,
+        definition=definition,
+        staff_member=staff_member,
+        operational_date=operational_date,
     )
 
 
@@ -334,12 +392,21 @@ def checklist_state(request, definition_id):
         category=definition.category,
         shift=definition.shift,
     )
+    staff_member = None
+    if request.GET.get("staff"):
+        staff_member = get_object_or_404(
+            StaffMember,
+            pk=request.GET.get("staff"),
+            program=instance.program,
+            is_active=True,
+        )
     revision = _checklist_revision(instance)
     if request.GET.get("revision") == revision:
         return JsonResponse({"changed": False, "revision": revision})
     return JsonResponse(
         _checklist_state_payload(
             instance,
+            staff_member=staff_member,
             include_audit=can_view_contributor_audit(request.user, instance.program_id),
         )
     )
@@ -372,6 +439,12 @@ def update_item_state(request, item_id):
         return JsonResponse(
             _checklist_state_payload(
                 changed_item.instance,
+                staff_member=get_object_or_404(
+                    StaffMember,
+                    pk=request.POST.get("staff"),
+                    program=changed_item.instance.program,
+                    is_active=True,
+                ),
                 include_audit=can_view_contributor_audit(
                     request.user, changed_item.instance.program_id
                 ),
@@ -390,10 +463,11 @@ def update_item_state(request, item_id):
 @require_POST
 def update_discrepancy(request, instance_id):
     explanation = request.POST.get("explanation", "")
-    if not explanation.strip():
-        return redirect(reverse("dashboard"))
     instance = get_object_or_404(
-        ChecklistInstance.objects.select_related("program"), pk=instance_id
+        ChecklistInstance.objects.select_related(
+            "program", "definition__category__program", "definition__shift"
+        ),
+        pk=instance_id,
     )
     staff_member = get_object_or_404(
         StaffMember,
@@ -401,16 +475,88 @@ def update_discrepancy(request, instance_id):
         program=instance.program,
         is_active=True,
     )
-    try:
-        save_discrepancy_explanation(
-            instance=instance,
-            actor=request.user,
+    if not can_operate_program(request.user, instance.program_id):
+        raise PermissionDenied("Operational-entry access is required for this Program.")
+    confirmation = request.POST.get("name_confirmation", "")
+    if confirmation.strip().casefold() != staff_member.display_name.casefold():
+        return _render_checklist_detail(
+            request,
+            definition=instance.definition,
             staff_member=staff_member,
-            explanation=explanation,
+            operational_date=instance.operational_date,
+            explanation_value=explanation,
+            confirmation_value=confirmation,
+            confirmation_error=(
+                "Your Name Here must match the selected staff member's complete name."
+            ),
+            status=400,
         )
+    try:
+        if explanation.strip():
+            save_discrepancy_explanation(
+                instance=instance,
+                actor=request.user,
+                staff_member=staff_member,
+                explanation=explanation,
+            )
+        else:
+            validate_operational_entry_date(instance.operational_date)
     except ValidationError as exc:
         return HttpResponseBadRequest(" ".join(exc.messages))
     return redirect(reverse("dashboard"))
+
+
+@login_required
+def feedback(request):
+    available_programs = programs_for_feedback(request.user)
+    raw_program = request.POST.get("program") or request.GET.get("program")
+    try:
+        requested_program_id = int(raw_program) if raw_program else None
+    except (TypeError, ValueError):
+        requested_program_id = None
+    session_program_id = request.session.get("chore_active_program_id")
+    program = available_programs.filter(
+        pk=requested_program_id or session_program_id
+    ).first()
+    if program is None:
+        program = available_programs.first()
+    if program is None:
+        raise PermissionDenied("Feedback access is required.")
+    request.session["chore_active_program_id"] = program.pk
+
+    form = FeedbackForm(request.POST or None, program=program)
+    if request.method == "POST" and form.is_valid():
+        submission, created = create_feedback_submission(
+            program=program,
+            staff_member=form.cleaned_data["staff"],
+            content=form.cleaned_data["feedback"],
+            actor=request.user,
+            idempotency_key=form.cleaned_data["submission_token"],
+        )
+        if not created:
+            messages.info(request, "This feedback was already submitted.")
+        elif submission.email_state == FeedbackEmailState.SENT:
+            messages.success(request, "Feedback submitted and email notification sent.")
+        elif submission.email_state == FeedbackEmailState.SUPPRESSED:
+            messages.success(
+                request,
+                "Feedback submitted. Email notifications are disabled in this environment.",
+            )
+        else:
+            messages.warning(
+                request,
+                "Feedback submitted, but the email notification could not be delivered.",
+            )
+        return redirect("feedback")
+    return render(
+        request,
+        "checklists/feedback.html",
+        {
+            "form": form,
+            "program": program,
+            "available_programs": available_programs,
+        },
+    )
 
 
 @staff_member_required
@@ -430,6 +576,7 @@ def _report_for_request(request):
     program = selected_program(request.user, request.GET.get("program"))
     if program is None:
         raise PermissionDenied("Manager reporting access is required.")
+    request.session["chore_active_program_id"] = program.pk
     period = period_from_params(request.GET, timezone.localdate())
     report = build_report(
         program=program,
@@ -489,6 +636,9 @@ def report_csv(request):
             "Task state",
             "Latest contributor",
             "Latest contribution timestamp",
+            "Required staff completions",
+            "Active staff completions",
+            "Active completion details",
         ]
     )
     for row in report["rows"]:
@@ -503,6 +653,9 @@ def report_csv(request):
                     0,
                     0,
                     row["pending_count"],
+                    "",
+                    "",
+                    "",
                     "",
                     "",
                     "",
@@ -531,6 +684,12 @@ def report_csv(request):
                     task["state_label"],
                     task["contributor"],
                     task["changed_at"].isoformat() if task["changed_at"] else "",
+                    task["required_completion_count"],
+                    task["actual_completion_count"],
+                    "; ".join(
+                        f"{completion['staff']} @ {completion['completed_at'].isoformat()}"
+                        for completion in task["active_completions"]
+                    ),
                 ]
             )
     return response

@@ -1,14 +1,21 @@
 import time
+from email.utils import parseaddr
 
+from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.mail import EmailMessage
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.utils import timezone
 
 from .models import (
     AssignmentSectionMembership,
+    ActiveTaskCompletion,
     ChecklistInstance,
     ChecklistItem,
     DiscrepancyExplanation,
+    FeedbackEmailState,
+    FeedbackSubmission,
+    Program,
     ProgramRole,
     SectionTaskMembership,
     StaffContribution,
@@ -51,6 +58,19 @@ def can_view_contributor_audit(user, program_id):
         role=ProgramRole.MANAGER,
         is_active=True,
     ).exists()
+
+
+def programs_for_feedback(user):
+    if not user.is_authenticated or not user.is_active:
+        return Program.objects.none()
+    if user.is_superuser:
+        return Program.objects.filter(is_active=True)
+    return Program.objects.filter(
+        is_active=True,
+        memberships__user=user,
+        memberships__is_active=True,
+        memberships__role__in=(ProgramRole.OPERATIONAL, ProgramRole.MANAGER),
+    ).distinct()
 
 
 def _run_serialized_write(operation):
@@ -159,6 +179,9 @@ def resolve_checklist(definition, operational_date):
                             requires_completion_note_snapshot=task.requires_completion_note,
                             scheduled_start_snapshot=task.scheduled_start,
                             scheduled_end_snapshot=task.scheduled_end,
+                            required_staff_completions_snapshot=(
+                                task.required_staff_completions
+                            ),
                         )
                     )
                 ChecklistItem.objects.bulk_create(items)
@@ -250,15 +273,78 @@ def change_item_state(
                 raise ValidationError(
                     {"activity_text": "Describe the programming activity before completing this task."}
                 )
-            if new_state == item.current_state:
-                return item, None
+            now = timezone.now()
+            active_completions = ActiveTaskCompletion.objects.select_for_update().filter(
+                item=item, is_active=True
+            )
+            selected_completion = active_completions.filter(staff=selected_staff).first()
+            previous_state = item.current_state
+
+            if new_state == TaskState.COMPLETED:
+                if selected_completion is not None:
+                    return item, None
+                active_count = active_completions.count()
+                if (
+                    item.current_state == TaskState.COMPLETED
+                    and active_count >= item.required_staff_completions_snapshot
+                ):
+                    raise ValidationError(
+                        {"state": "This task already has all required staff completions."}
+                    )
+                ActiveTaskCompletion.objects.create(
+                    item=item,
+                    staff=selected_staff,
+                    recorded_by=None if system else actor,
+                    completed_at=now,
+                )
+                active_count += 1
+                resulting_state = (
+                    TaskState.COMPLETED
+                    if active_count >= item.required_staff_completions_snapshot
+                    else TaskState.PENDING
+                )
+            elif new_state == TaskState.PENDING:
+                if item.current_state == TaskState.NOT_APPLICABLE:
+                    resulting_state = TaskState.PENDING
+                else:
+                    completion_to_reset = selected_completion
+                    if (
+                        completion_to_reset is None
+                        and item.required_staff_completions_snapshot == 1
+                    ):
+                        completion_to_reset = active_completions.first()
+                    if completion_to_reset is None:
+                        return item, None
+                    completion_to_reset.is_active = False
+                    completion_to_reset.reset_at = now
+                    completion_to_reset.reset_by = None if system else actor
+                    completion_to_reset.save(
+                        update_fields=("is_active", "reset_at", "reset_by")
+                    )
+                    active_count = active_completions.exclude(
+                        pk=completion_to_reset.pk
+                    ).count()
+                    resulting_state = (
+                        TaskState.COMPLETED
+                        if active_count >= item.required_staff_completions_snapshot
+                        else TaskState.PENDING
+                    )
+            else:
+                if item.current_state == TaskState.NOT_APPLICABLE:
+                    return item, None
+                active_completions.update(
+                    is_active=False,
+                    reset_at=now,
+                    reset_by=None if system else actor,
+                )
+                resulting_state = TaskState.NOT_APPLICABLE
 
             contribution = StaffContribution.objects.create(
                 item=item,
                 staff=selected_staff,
                 recorded_by=None if system else actor,
-                previous_state=item.current_state,
-                new_state=new_state,
+                previous_state=previous_state,
+                new_state=resulting_state,
                 activity_text=(
                     normalized_activity_text
                     if new_state == TaskState.COMPLETED
@@ -266,9 +352,9 @@ def change_item_state(
                     else ""
                 ),
             )
-            item.current_state = new_state
+            item.current_state = resulting_state
             item.current_staff = selected_staff
-            item.state_changed_at = timezone.now()
+            item.state_changed_at = now
             item.save(
                 update_fields=(
                     "current_state",
@@ -280,6 +366,90 @@ def change_item_state(
             return item, contribution
 
     return _run_serialized_write(write)
+
+
+def create_feedback_submission(
+    *, program, staff_member, content, actor, idempotency_key
+):
+    if actor is None or not actor.is_authenticated or not actor.is_active:
+        raise PermissionDenied("An active application account is required.")
+    if not programs_for_feedback(actor).filter(pk=program.pk).exists():
+        raise PermissionDenied("Feedback access is required for this Program.")
+    if not staff_member.is_active or staff_member.program_id != program.pk:
+        raise PermissionDenied("The selected staff member is not active in this Program.")
+    submitted_content = content or ""
+    if not submitted_content.strip():
+        raise ValidationError({"content": "Enter feedback before submitting."})
+
+    submission, created = FeedbackSubmission.objects.get_or_create(
+        idempotency_key=idempotency_key,
+        defaults={
+            "program": program,
+            "staff": staff_member,
+            "content": submitted_content,
+            "submitted_by": actor,
+        },
+    )
+    if not created:
+        return submission, False
+
+    if not settings.EMAIL_ENABLED:
+        submission.email_state = FeedbackEmailState.SUPPRESSED
+        submission.email_error = "Outbound email is disabled by application configuration."
+        submission.save(update_fields=("email_state", "email_error"))
+        return submission, True
+
+    manager_addresses = program.memberships.filter(
+        role=ProgramRole.MANAGER,
+        is_active=True,
+        receive_scheduled_reports=True,
+        user__is_active=True,
+    ).exclude(user__email="").values_list("user__email", flat=True)
+    recipients = []
+    seen_addresses = set()
+    for address in [*manager_addresses, settings.DEFAULT_FROM_EMAIL]:
+        normalized_address = parseaddr(address)[1].casefold()
+        if normalized_address and normalized_address not in seen_addresses:
+            recipients.append(address)
+            seen_addresses.add(normalized_address)
+
+    local_submitted_at = timezone.localtime(submission.submitted_at)
+    subject = (
+        f"Feedback --- {staff_member.display_name} --- "
+        f"{local_submitted_at.date().isoformat()}"
+    )
+    body = "\n".join(
+        (
+            f"Program: {program.name}",
+            f"Staff member: {staff_member.display_name}",
+            f"Submission date: {local_submitted_at.date().isoformat()}",
+            f"Submission time: {local_submitted_at.strftime('%H:%M:%S %Z')}",
+            "",
+            "Feedback:",
+            submitted_content,
+        )
+    )
+    try:
+        sent_count = EmailMessage(
+            subject=subject,
+            body=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=recipients,
+        ).send(fail_silently=False)
+        if sent_count != 1:
+            raise RuntimeError("The configured email backend did not confirm delivery.")
+    except Exception as exc:  # Persisted feedback must survive every backend failure.
+        submission.email_state = FeedbackEmailState.FAILED
+        submission.email_error = str(exc)[:4000]
+        submission.save(update_fields=("email_state", "email_error"))
+    else:
+        submission.email_state = FeedbackEmailState.SENT
+        submission.email_sent_at = timezone.now()
+        submission.email_error = ""
+        submission.save(
+            update_fields=("email_state", "email_sent_at", "email_error")
+        )
+    return submission, True
 
 
 def save_discrepancy_explanation(*, instance, actor, staff_member, explanation):

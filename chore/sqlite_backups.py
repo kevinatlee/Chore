@@ -4,7 +4,7 @@ import shutil
 import sqlite3
 import uuid
 from contextlib import closing
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -103,23 +103,86 @@ def newest_valid_backup(backup_dir):
     raise BackupError(f"No valid production backup exists in {Path(backup_dir)}.")
 
 
-def refresh_database_from_backup(backup_dir, destination_database):
-    """Atomically replace the test database with a writable backup copy."""
+def _path_is_within(path, directory):
+    return path == directory or directory in path.parents
+
+
+def _copy_sqlite_snapshot(source_database, destination):
+    with closing(_read_only_connection(source_database)) as source:
+        with closing(sqlite3.connect(destination)) as target:
+            source.backup(target)
+
+
+def _refresh_recovery_backup(destination_database):
+    if not destination_database.exists():
+        return None
+    if not validate_chore_database(destination_database):
+        raise BackupError(
+            f"Existing ChoreTest database is invalid; refusing replacement: {destination_database}"
+        )
+    recovery_dir = destination_database.parent / "refresh-backups"
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    recovery = recovery_dir / f"choretest-before-refresh-{timestamp}.sqlite3"
+    if recovery.exists():
+        recovery = recovery_dir / (
+            f"choretest-before-refresh-{timestamp}-{uuid.uuid4().hex[:8]}.sqlite3"
+        )
+    _copy_sqlite_snapshot(destination_database, recovery)
+    if not validate_chore_database(recovery):
+        recovery.unlink(missing_ok=True)
+        raise BackupError("Pre-refresh ChoreTest recovery backup failed validation.")
+    return recovery
+
+
+def refresh_database_from_backup(
+    backup_dir, destination_database, *, source_database=None
+):
+    """Safely and atomically replace a stopped ChoreTest database."""
     backup_dir = Path(backup_dir).resolve()
     destination_database = Path(destination_database).resolve()
-    if destination_database == backup_dir or backup_dir in destination_database.parents:
+    if _path_is_within(destination_database, backup_dir):
         raise BackupError("The test database must not be stored in the backup directory.")
 
-    source = newest_valid_backup(backup_dir)
+    if source_database is None:
+        source = newest_valid_backup(backup_dir)
+    else:
+        source = Path(source_database).resolve()
+        if not _path_is_within(source, backup_dir):
+            raise BackupError("The selected snapshot must be inside the read-only backup directory.")
+        if not validate_chore_database(source):
+            raise BackupError(f"Selected snapshot is not a valid Chore SQLite database: {source}")
+    if source == destination_database:
+        raise BackupError("Source and ChoreTest destination must be different files.")
+
     destination_database.parent.mkdir(parents=True, exist_ok=True)
+    existing_stat = destination_database.stat() if destination_database.exists() else None
+    recovery = _refresh_recovery_backup(destination_database)
     temporary = destination_database.parent / (
         f".{destination_database.name}.{uuid.uuid4().hex}.tmp"
     )
     try:
-        shutil.copyfile(source, temporary)
+        shutil.copy2(source, temporary)
+        if existing_stat is not None:
+            os.chmod(temporary, existing_stat.st_mode)
+            if hasattr(os, "chown"):
+                try:
+                    os.chown(temporary, existing_stat.st_uid, existing_stat.st_gid)
+                except PermissionError:
+                    pass
         if not validate_chore_database(temporary):
             raise BackupError("Copied ChoreTest database failed validation.")
+        with temporary.open("r+b") as copied_file:
+            copied_file.flush()
+            os.fsync(copied_file.fileno())
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(f"{destination_database}{suffix}").unlink(missing_ok=True)
         temporary.replace(destination_database)
+        if not validate_chore_database(destination_database):
+            if recovery is not None:
+                shutil.copy2(recovery, temporary)
+                temporary.replace(destination_database)
+            raise BackupError("Refreshed ChoreTest database failed post-replacement validation.")
     finally:
         temporary.unlink(missing_ok=True)
     return source, destination_database

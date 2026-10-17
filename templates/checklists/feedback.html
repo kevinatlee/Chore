@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Feedback · Chore{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">{{ program.name }}</p>
+    <h1>Feedback</h1>
+  </div>
+</div>
+
+{% if available_programs|length > 1 %}
+  <form method="get" class="program-switcher">
+    <label for="feedback-program">Program</label>
+    <select id="feedback-program" name="program" onchange="this.form.submit()">
+      {% for available_program in available_programs %}
+        <option value="{{ available_program.pk }}"{% if available_program.pk == program.pk %} selected{% endif %}>{{ available_program.name }}</option>
+      {% endfor %}
+    </select>
+  </form>
+{% endif %}
+
+<section class="feedback-panel">
+  <form method="post" class="feedback-form">
+    {% csrf_token %}
+    <input type="hidden" name="program" value="{{ program.pk }}">
+    {{ form.submission_token }}
+    <div class="field-group">
+      <label for="{{ form.staff.id_for_label }}">Your Name</label>
+      {{ form.staff }}
+      {% for error in form.staff.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+    </div>
+    <div class="field-group">
+      <label for="{{ form.feedback.id_for_label }}">Feedback</label>
+      {{ form.feedback }}
+      {% for error in form.feedback.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+    </div>
+    {% for error in form.submission_token.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+    <button class="button primary" type="submit">Submit</button>
+  </form>
+</section>
+{% endblock %}

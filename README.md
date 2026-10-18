@@ -76,12 +76,15 @@ Concurrency remains deliberately small and database-backed: each mutation rechec
 ## Verification
 
 ```powershell
+python -m pip install -r requirements-test.txt
 python manage.py check
 python manage.py makemigrations --check --dry-run
 python manage.py test
 python -m compileall chore checklists
 git diff --check main..HEAD
 ```
+
+The browser regression tests use headless Chrome through Selenium.
 
 ## Configuration updates
 

@@ -181,13 +181,14 @@
 
   const confirmationForm = checklist.querySelector("[data-confirmation-form]");
   if (confirmationForm) {
+    const input = confirmationForm.querySelector('[name="name_confirmation"]');
+    input.addEventListener("input", () => input.setCustomValidity(""));
     confirmationForm.addEventListener("submit", event => {
-      const input = confirmationForm.querySelector('[name="name_confirmation"]');
       const matches = input.value.trim().toLocaleLowerCase() ===
         confirmationForm.dataset.staffName.trim().toLocaleLowerCase();
       input.setCustomValidity(matches
         ? ""
-        : "Enter the selected staff member's complete name.");
+        : "Enter Your Name Here must match the selected staff member's complete name.");
       if (!matches) {
         event.preventDefault();
         input.reportValidity();

@@ -487,7 +487,7 @@ def update_discrepancy(request, instance_id):
             explanation_value=explanation,
             confirmation_value=confirmation,
             confirmation_error=(
-                "Your Name Here must match the selected staff member's complete name."
+                "Enter Your Name Here must match the selected staff member's complete name."
             ),
             status=400,
         )

@@ -257,7 +257,15 @@ class NameConfirmationTests(ImprovementFixtureMixin, TestCase):
                 )
                 self.assertEqual(response.status_code, 400)
                 self.assertContains(response, "Unsaved but preserved", status_code=400)
-                self.assertContains(response, "must match", status_code=400)
+                self.assertEqual(
+                    response.context["confirmation_error"],
+                    "Enter Your Name Here must match the selected staff member's complete name.",
+                )
+                self.assertContains(
+                    response,
+                    "Enter Your Name Here must match",
+                    status_code=400,
+                )
                 self.assertFalse(
                     self.instance.discrepancy_explanations.filter(staff=self.staff_a).exists()
                 )
